@@ -1,0 +1,75 @@
+name: Harvest OSM & Publish Datasets
+
+on:
+  workflow_dispatch:
+    inputs:
+      continent:
+        description: 'Geofabrik Continent or Region'
+        required: true
+        default: 'central-america'
+        type: choice
+        options:
+          - central-america
+          - south-america
+          - australia-oceania
+          - africa
+          - europe
+          - asia
+          - north-america
+      specific_country:
+        description: 'Optional single country slug (e.g., guatemala, monaco)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  harvest-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y osmium-tool aria2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Harvester Engine
+        run: |
+          COUNTRY_FLAG=""
+          if [ -n "${{ inputs.specific_country }}" ]; then
+            COUNTRY_FLAG="--country ${{ inputs.specific_country }}"
+          fi
+          python main.py --continent "${{ inputs.continent }}" $COUNTRY_FLAG
+
+      - name: Publish Artifacts to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="release-${{ inputs.continent }}"
+          RELEASE_TITLE="OSM Datasets: ${{ inputs.continent }}"
+          
+          # List generated files
+          ls -lh /tmp/osm_scratch/exports/
+          
+          # Publish or update release
+          gh release create "$TAG_NAME" /tmp/osm_scratch/exports/* \
+            --title "$RELEASE_TITLE" \
+            --notes "Automated daily extraction of administrative boundaries, weather coordinates, and localized settlements from OpenStreetMap and Geofabrik." \
+            --clobber
+
