@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       continent:
-        description: 'Geofabrik Continent or Region'
+        description: 'Geofabrik Continent or Region (use all for worldwide)'
         required: true
         default: 'central-america'
         type: choice
@@ -16,8 +16,9 @@ on:
           - europe
           - asia
           - north-america
+          - all
       specific_country:
-        description: 'Optional single country slug (e.g., guatemala, monaco)'
+        description: 'Optional single country slug (e.g., guatemala, monaco, greenland)'
         required: false
         type: string
       skip_existing:
@@ -25,15 +26,77 @@ on:
         required: true
         default: true
         type: boolean
+      max_runners:
+        description: 'Max parallel GitHub runner jobs (default: 15, max: 20)'
+        required: true
+        default: '15'
+        type: string
 
 permissions:
   contents: write
 
 jobs:
-  harvest-and-publish:
+  plan-harvest:
+    name: 🔍 Plan Matrix & Prepare Release
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      tag_name: ${{ steps.plan.outputs.tag_name }}
+      has_targets: ${{ steps.plan.outputs.has_targets }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Planning Dependencies
+        run: |
+          pip install requests
+
+      - name: Calculate Matrix & Check Releases
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FLAGS=""
+          if [ -n "${{ inputs.specific_country }}" ]; then
+            FLAGS="$FLAGS --country ${{ inputs.specific_country }}"
+          fi
+          if [ "${{ inputs.skip_existing }}" != "true" ]; then
+            FLAGS="$FLAGS --force"
+          fi
+          python main.py --continent "${{ inputs.continent }}" --plan-matrix --max-runners "${{ inputs.max_runners }}" $FLAGS
+
+      - name: Pre-Create Release Tag
+        if: steps.plan.outputs.has_targets == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ steps.plan.outputs.tag_name }}"
+          RELEASE_TITLE="OSM Datasets: ${{ inputs.continent }}"
+          if [ "${{ inputs.continent }}" = "all" ]; then
+            RELEASE_TITLE="OSM Datasets: Worldwide"
+          fi
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Creating release $TAG_NAME..."
+            gh release create "$TAG_NAME" \
+              --title "$RELEASE_TITLE" \
+              --notes "Automated parallel extraction of administrative boundaries, spatial coordinates, pre-filtered PBF extracts, and localized settlements from OpenStreetMap and Geofabrik."
+          fi
+
+  parallel-harvest:
+    name: ⚡ Runner ${{ matrix.batch_id }} (${{ matrix.count }} countries)
+    needs: plan-harvest
+    if: needs.plan-harvest.outputs.has_targets == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan-harvest.outputs.matrix) }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -54,42 +117,20 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Harvester Engine
+      - name: Run Harvester Engine for Batch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          FLAGS=""
-          if [ -n "${{ inputs.specific_country }}" ]; then
-            FLAGS="$FLAGS --country ${{ inputs.specific_country }}"
-          fi
-          if [ "${{ inputs.skip_existing }}" != "true" ]; then
-            FLAGS="$FLAGS --force"
-          fi
-          python main.py --continent "${{ inputs.continent }}" $FLAGS
+          python main.py --batch "${{ matrix.countries }}" --workers 2
 
-      - name: Publish Artifacts to GitHub Releases
+      - name: Upload Artifacts to Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="release-${{ inputs.continent }}"
-          RELEASE_TITLE="OSM Datasets: ${{ inputs.continent }}"
-          
-          # Check if any new exports were generated
-          if [ -z "$(ls -A /tmp/osm_scratch/exports/ 2>/dev/null)" ]; then
-            echo "ℹ️ No new files generated (all queued targets were already up to date)."
-            exit 0
+          TAG_NAME="${{ needs.plan-harvest.outputs.tag_name }}"
+          if [ -d /tmp/osm_scratch/exports ] && [ -n "$(ls -A /tmp/osm_scratch/exports 2>/dev/null)" ]; then
+            ls -lh /tmp/osm_scratch/exports/
+            gh release upload "$TAG_NAME" /tmp/osm_scratch/exports/* --clobber
+          else
+            echo "ℹ️ No exports found to upload."
           fi
-
-          # List generated files
-          ls -lh /tmp/osm_scratch/exports/
-          
-          # Create release if it doesn't exist yet
-          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Creating release $TAG_NAME..."
-            gh release create "$TAG_NAME" \
-              --title "$RELEASE_TITLE" \
-              --notes "Automated daily extraction of administrative boundaries, weather coordinates, and localized settlements from OpenStreetMap and Geofabrik."
-          fi
-
-          # Upload artifacts incrementally without clobbering other countries
-          gh release upload "$TAG_NAME" /tmp/osm_scratch/exports/* --clobber

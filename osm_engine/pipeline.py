@@ -7,7 +7,7 @@ import zipfile
 from typing import Dict, Any, Set
 from .config import (
     RAM_TEMP_DIR, RAM_DB_DIR, EXPORT_DIR, ENABLE_PBF_COMPRESSION,
-    SETTLEMENT_PLACES, TOP_LANGS
+    TOP_LANGS
 )
 from .db import init_country_databases, create_db_indexes
 from .extractor import FastUnifiedOSMExtractor
@@ -18,26 +18,29 @@ def process_country_target(c_info: Dict[str, Any], dynamic_languages: Dict[str, 
     slug = c_info["slug"]
     pbf_url = c_info["url"]
 
+    # Distinct prefix guarantees zero collisions between multi-country extracts or sub-extracts
+    prefix = cc if len(c_info["all_ccs"]) == 1 else f"{cc}_{slug}"
+
     # Local paths (stored on scratch disk)
     raw_pbf = os.path.join(RAM_TEMP_DIR, f"{slug}.osm.pbf")
     filtered_pbf = os.path.join(RAM_TEMP_DIR, f"{slug}_filtered.osm.pbf")
-    local_raw_db = os.path.join(RAM_DB_DIR, f"{cc}_osm.sqlite")
-    local_weather_db = os.path.join(RAM_DB_DIR, f"{cc}_weather.sqlite")
+    local_raw_db = os.path.join(RAM_DB_DIR, f"{prefix}_osm.sqlite")
+    local_spatial_db = os.path.join(RAM_DB_DIR, f"{prefix}_spatial.sqlite")
 
     # Export targets for GitHub Releases
-    export_raw_db = os.path.join(EXPORT_DIR, f"{cc}_osm.sqlite")
-    export_weather_db = os.path.join(EXPORT_DIR, f"{cc}_weather.sqlite")
-    export_filtered_pbf = os.path.join(EXPORT_DIR, f"{cc}_filtered.osm.pbf")
-    export_bundle_zip = os.path.join(EXPORT_DIR, f"{cc}_bundle.zip")
+    export_raw_db = os.path.join(EXPORT_DIR, f"{prefix}_osm.sqlite")
+    export_spatial_db = os.path.join(EXPORT_DIR, f"{prefix}_spatial.sqlite")
+    export_filtered_pbf = os.path.join(EXPORT_DIR, f"{prefix}_filtered.osm.pbf")
+    export_bundle_zip = os.path.join(EXPORT_DIR, f"{prefix}_bundle.zip")
 
     t0 = time.time()
 
     # Pre-clean
-    for f in (local_raw_db, local_weather_db, raw_pbf, filtered_pbf, export_bundle_zip):
+    for f in (local_raw_db, local_spatial_db, raw_pbf, filtered_pbf, export_bundle_zip):
         if os.path.exists(f):
             os.remove(f)
 
-    init_country_databases(local_raw_db, local_weather_db)
+    init_country_databases(local_raw_db, local_spatial_db)
 
     allowed_langs = set(TOP_LANGS)
     for iso in c_info["all_ccs"]:
@@ -50,72 +53,81 @@ def process_country_target(c_info: Dict[str, Any], dynamic_languages: Dict[str, 
         "--allow-overwrite=true", "-d", RAM_TEMP_DIR, "-o",
         os.path.basename(raw_pbf), pbf_url
     ]
-    res = subprocess.run(dl_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if res.returncode != 0 or not os.path.exists(raw_pbf) or os.path.getsize(raw_pbf) == 0:
-        raise RuntimeError(f"Download failed from {pbf_url}")
+    dl_res = subprocess.run(dl_cmd, capture_output=True, text=True)
+    if dl_res.returncode != 0 or not os.path.exists(raw_pbf) or os.path.getsize(raw_pbf) == 0:
+        err_msg = dl_res.stderr.strip() if dl_res.stderr else "Unknown download error"
+        raise RuntimeError(f"Download failed from {pbf_url}: {err_msg}")
 
     dl_mb = os.path.getsize(raw_pbf) / (1024 * 1024)
 
-    # 2. C++ Pre-filtering via Osmium Tool
-    places_arg = f"nwr/place={','.join(sorted(SETTLEMENT_PLACES))}"
+    # 2. C++ Pre-filtering via Osmium Tool (Keep boundaries, places, admin levels, and ID references)
     filter_cmd = [
         "osmium", "tags-filter", raw_pbf,
         "r/boundary=administrative", "w/boundary=administrative",
         "r/type=boundary", "w/type=boundary",
-        places_arg
+        "nwr/place",
+        "nwr/admin_level",
+        "nwr/wikidata",
+        "nwr/geonames:id",
+        "nwr/gn:id"
     ]
     if not ENABLE_PBF_COMPRESSION:
         filter_cmd.extend(["-f", "pbf,pbf_compression=none"])
     filter_cmd.extend(["-o", filtered_pbf, "--overwrite"])
 
-    subprocess.run(filter_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    filt_res = subprocess.run(filter_cmd, capture_output=True, text=True)
+    if filt_res.returncode != 0:
+        err_msg = filt_res.stderr.strip() if filt_res.stderr else "Unknown filter error"
+        raise RuntimeError(f"Osmium filter failed for {slug}: {err_msg}")
 
     # Free raw download immediately to maintain scratch headroom
     if os.path.exists(raw_pbf):
         os.remove(raw_pbf)
 
     if not os.path.exists(filtered_pbf) or os.path.getsize(filtered_pbf) == 0:
-        raise RuntimeError(f"Osmium filter generated empty output for {cc}")
+        raise RuntimeError(f"Osmium filter generated empty output for {prefix}")
 
     filt_mb = os.path.getsize(filtered_pbf) / (1024 * 1024)
 
-    # Copy filtered PBF directly to export folder
+    # Copy pre-filtered PBF directly to export folder for fast future downstream processing
     shutil.copy(filtered_pbf, export_filtered_pbf)
 
     # 3. Stream & Extract into SQLite
     conn_raw = sqlite3.connect(local_raw_db)
-    conn_w = sqlite3.connect(local_weather_db)
-    handler = FastUnifiedOSMExtractor(cc, conn_raw, conn_w, allowed_langs)
+    conn_s = sqlite3.connect(local_spatial_db)
+    handler = FastUnifiedOSMExtractor(cc, conn_raw, conn_s, allowed_langs)
     handler.apply_file(filtered_pbf, locations=True, idx='flex_mem')
     handler.flush()
+    handler.cleanup()  # Free way geometry coordinates and bboxes from memory
     conn_raw.close()
-    conn_w.close()
+    conn_s.close()
 
-    # 4. Generate Spatial Indexes
-    create_db_indexes(local_raw_db, local_weather_db)
+    # 4. Generate Spatial Indexes & Finalize WAL
+    create_db_indexes(local_raw_db, local_spatial_db)
 
     # 5. Move Databases to Export Folder
     shutil.move(local_raw_db, export_raw_db)
-    shutil.move(local_weather_db, export_weather_db)
+    shutil.move(local_spatial_db, export_spatial_db)
 
     if os.path.exists(filtered_pbf):
         os.remove(filtered_pbf)
 
-    # 6. Generate Minimized Country ZIP Bundle (70-85% size reduction)
+    # 6. Generate Minimized Country ZIP Bundle (contains both databases)
     with zipfile.ZipFile(export_bundle_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        zf.write(export_raw_db, arcname=f"{cc}_osm.sqlite")
-        zf.write(export_weather_db, arcname=f"{cc}_weather.sqlite")
+        zf.write(export_raw_db, arcname=f"{prefix}_osm.sqlite")
+        zf.write(export_spatial_db, arcname=f"{prefix}_spatial.sqlite")
     zip_mb = round(os.path.getsize(export_bundle_zip) / (1024 * 1024), 2)
 
     elapsed = time.time() - t0
     return {
         "cc": cc,
+        "prefix": prefix,
         "name": c_info["name"],
         "raw_pbf_mb": round(dl_mb, 1),
         "filtered_pbf_mb": round(filt_mb, 1),
         "bundle_zip_mb": zip_mb,
         "entities": handler.total_raw_count,
         "polygons": handler.total_admin_polygons,
-        "places": handler.total_weather_places,
+        "places": handler.total_spatial_places,
         "duration_sec": round(elapsed, 1)
     }
