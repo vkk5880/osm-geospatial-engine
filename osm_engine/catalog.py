@@ -24,6 +24,49 @@ def load_geonames_country_languages() -> Dict[str, Set[str]]:
     return country_langs
 
 
+# Approximate file sizes (MB) for large extracts to ensure balanced parallel runner scheduling
+KNOWN_EXTRACT_SIZES_MB: Dict[str, float] = {
+    "us": 9500.0,
+    "united-states": 9500.0,
+    "france": 4800.0,
+    "germany": 4300.0,
+    "russia": 4200.0,
+    "canada": 3800.0,
+    "brazil": 2700.0,
+    "italy": 2400.0,
+    "united-kingdom": 2000.0,
+    "japan": 2000.0,
+    "poland": 1900.0,
+    "spain": 1600.0,
+    "australia": 1400.0,
+    "india": 1400.0,
+    "indonesia": 900.0,
+    "mexico": 800.0,
+    "china": 800.0,
+    "turkey": 650.0,
+    "iran": 600.0,
+    "ukraine": 550.0,
+    "sweden": 500.0,
+    "argentina": 450.0,
+    "norway": 450.0,
+    "finland": 400.0,
+    "south-africa": 380.0,
+    "new-zealand": 350.0,
+    "colombia": 350.0,
+    "vietnam": 320.0,
+    "thailand": 300.0,
+    "chile": 280.0,
+    "philippines": 260.0,
+    "austria": 250.0,
+    "czech-republic": 250.0,
+    "switzerland": 230.0,
+    "greece": 220.0,
+    "romania": 220.0,
+    "gcc-states": 200.0,
+    "netherlands": 200.0,
+}
+
+
 def get_geofabrik_targets(continent_filter: Optional[str] = None) -> List[Dict[str, Any]]:
     """Discovers all country and territory extracts from Geofabrik, resolving continent lineage."""
     idx_url = "https://download.geofabrik.de/index-v1.json"
@@ -79,7 +122,7 @@ def get_geofabrik_targets(continent_filter: Optional[str] = None) -> List[Dict[s
 
         seen_slugs.add(slug_id)
         clean_isos = [code.strip().upper() for code in iso_codes if code.strip()]
-        size_mb = round(file_size_bytes / (1024 * 1024), 1) if file_size_bytes else 150.0
+        size_mb = KNOWN_EXTRACT_SIZES_MB.get(slug_id, round(file_size_bytes / (1024 * 1024), 1) if file_size_bytes else 80.0)
 
         targets.append({
             "slug": slug_id,

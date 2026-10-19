@@ -11,29 +11,30 @@
 [![CI/CD: GitHub Actions](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF.svg?logo=githubactions&logoColor=white)](.github/workflows/harvest_and_release.yml)
 [![Architecture: Cloud--Native](https://img.shields.io/badge/Architecture-Serverless%20%26%20Cloud--Native-blueviolet.svg)](#-system-architecture)
 
-*Engineered for resource-constrained CI/CD runners (2 vCPUs / 7 GB RAM) to stream millions of spatial nodes, reconstruct topological boundary polygons, and publish production datasets directly to GitHub Releases.*
+*Ready-to-query, zero-dependency SQLite spatial databases, compact binary OSM extracts, and unified regional bundles published directly to GitHub Releases.*
 
-[Key Features](#-key-features) • [System Architecture](#-system-architecture) • [Artifact Formats](#-artifact-formats) • [Database Schemas](#-database-schemas) • [Parallel Architecture](#-parallel-processing--resource-budgeting) • [Query Recipes](#-sql-query-recipes) • [Quickstart](#-quickstart--local-development) • [GitHub Actions CI/CD](#-cloud-automation--github-actions)
+[What's Included](#-whats-included) • [Artifact Formats](#-artifact-formats) • [Database Schemas](#-database-schemas) • [SQL Recipes](#-sql-query-recipes) • [Quickstart](#-quickstart--local-development) • [Automation](#-cloud-automation--github-actions)
 
 </div>
 
 ---
 
-## ⚡ Overview & Why GeoSpatial-Engine?
+## ⚡ Overview: What You Get
 
-Traditional geospatial extract-transform-load (ETL) pipelines processing global OpenStreetMap (OSM) datasets typically require enterprise PostGIS clusters, high-memory virtual machines (32GB+ RAM), and complex spatial indexing daemons.
+Working with global OpenStreetMap (OSM) datasets usually requires spinning up heavy PostgreSQL/PostGIS database clusters, installing complex spatial extensions, or downloading multi-gigabyte raw files just to extract city names or administrative boundaries.
 
-**GeoSpatial-Engine** eliminates this operational overhead by providing a streamlined, **zero-database-dependency** pipeline designed to execute inside standard serverless environments (such as GitHub Actions `ubuntu-latest` runners). It pre-filters binary protocol buffers via C++ bindings, reconstructs fragmented topological boundaries in a single stream, and outputs production-ready SQLite databases with Write-Ahead Logging (`WAL`), pre-calculated bounding boxes, and reusable pre-filtered PBF extracts.
+**GeoSpatial-Engine** eliminates this complexity by providing clean, pre-built, and self-contained geospatial datasets for every country and territory worldwide. Everything is delivered in lightweight, standalone SQLite databases with pre-computed bounding boxes, simplified GeoJSON polygons, and localized multilingual names—ready for immediate querying in your applications with zero database setup.
 
-### 🌟 Key Highlights
-* **Binary-Level Pre-Filtering & PBF Preservation:** Integrates `osmium-tool` expressions at the C++ binary level to isolate administrative boundaries and settlement nodes prior to Python ingestion—reducing data overhead by **60% to 90%** and preserving `{CC}_filtered.osm.pbf` for fast downstream processing.
-* **Dual-Core Parallel Worker Pool:** Automatically scales across 2 parallel workers for standard country extracts while dynamically enforcing sequential (SOLO) execution on multi-gigabyte extracts (>= 1024 MB) to eliminate Out-Of-Memory (OOM) risks.
-* **Zero-Leak Streaming Parser:** Employs `pyosmium.SimpleHandler` with low-overhead C++ node iterators, enabling processing of multi-gigabyte PBF extracts without building bloated in-memory element trees.
-* **Topological Boundary Reconstitution:** Assembles disjointed outer boundary ways into verified `MultiPolygon` geometries using `shapely.ops.linemerge` and topology-preserving Douglas-Peucker simplification (`0.002°` tolerance).
-* **High-Throughput SQLite Storage Engine:** Connects SQLite with high-write pragmas (`PRAGMA journal_mode = WAL`, `PRAGMA synchronous = OFF`, 64MB memory caches) and defers B-Tree indexing until after bulk streaming ingestion.
-* **Complete Global & Autonomous Territory Coverage:** Resolves recursive parent hierarchies to process all sovereign nations and autonomous territories (e.g. Greenland, Puerto Rico, French overseas departments).
-* **Incremental Release Harvesting:** Automatically detects existing assets in GitHub Releases to skip already-harvested countries—allowing entire continents or the entire globe to be processed incrementally across workflow runs.
-* **Autonomous Cloud Distribution:** Completely decoupled from external storage drives or cloud buckets; streams artifacts directly to **GitHub Releases CDN** for frictionless downstream consumption.
+### 🌟 What's Included
+* **📦 3 Unified Merged Downloads:** Instead of downloading hundreds of individual files, access an entire continent or the entire globe in just **3 consolidated files**:
+  1. **`{label}_unified_spatial.zip`** — Single merged spatial database with all settlements, centroids, bounding boxes, and boundaries.
+  2. **`{label}_unified_osm.zip`** — Single merged entity catalog with populations, Wikidata QIDs, GeoNames IDs, and multilingual translations.
+  3. **`{label}_unified_pbf.zip`** — Bundled archive of all country-level clean, pre-filtered binary `.osm.pbf` extracts.
+* **🗺️ Standalone Per-Country SQLite Databases:** Every country has its own `{CC}_spatial.sqlite` and `{CC}_osm.sqlite` with pre-built secondary B-Tree indexes on coordinates, admin levels, Wikidata QIDs, and country codes.
+* **🌐 Multilingual Localized Translations:** Official and common names mapped to ISO 639-1 languages (`en`, `es`, `fr`, `zh`, `ar`, `hi`, etc.) for seamless internationalization and UI display.
+* **📐 Verified Topological Boundary Polygons:** National and regional administrative boundaries (levels 2–8) assembled into clean `MultiPolygon` GeoJSON geometries with preserved topology.
+* **🎯 Pure Zero-Cross-Contamination Filtering:** Combined regional extracts (such as `gcc-states`, `israel-and-palestine`, `haiti-and-domrep`, `senegal-and-gambia`) are cleanly partitioned into their respective individual sovereign country datasets.
+* **⚡ Pre-Filtered Reusable PBF Extracts:** Cleaned binary `.osm.pbf` packages reduced by **70%–90%**, ready for immediate use in QGIS, GDAL, osmium, or mobile apps without downloading gigabytes of raw data.
 
 ---
 
@@ -86,7 +87,9 @@ Each country target generates production-grade outputs designed for different la
 | **`{CC}_spatial.sqlite`** | SQLite 3 (WAL mode) | Spatial database with settlement coordinates, centroids, bounding boxes (`min_lat`, `min_lon`, `max_lat`, `max_lon`), and simplified GeoJSON boundary polygons. |
 | **`{CC}_osm.sqlite`** | SQLite 3 (WAL mode) | Comprehensive entity catalog with administrative levels, Wikidata QID, GeoNames ID, population, elevation, and localized multilingual names. |
 | **`{CC}_bundle.zip`** | DEFLATE (6) | Optional bundle containing both SQLite databases, reducing download size by **70%–85%**. |
-| **`{CONTINENT}_all_spatial.zip`** | DEFLATE (6) | Combined bundle containing every country spatial database across an entire continent for 1-click regional access. |
+| **`{label}_unified_spatial.zip`** *(1 of 3 Unified)* | DEFLATE (6) | Single merged spatial database containing all countries' settlements, centroids, bounding boxes, and boundaries. |
+| **`{label}_unified_osm.zip`** *(2 of 3 Unified)* | DEFLATE (6) | Single merged OSM catalog database containing all countries' entities, metadata, and localized translations. |
+| **`{label}_unified_pbf.zip`** *(3 of 3 Unified)* | DEFLATE (6) | Single archive bundling every country's `{CC}_filtered.osm.pbf` extract for 1-click download of all country PBFs. |
 
 ---
 
@@ -114,19 +117,14 @@ Optimized for spatial boundary verification, GIS indexing, bounding-box searches
 
 ---
 
-## ⚡ Two-Tier Parallel Architecture (Up to 20 Concurrent Cloud Runners)
+## 🚀 Automated Cloud Builds & Release Pipeline
 
-To process massive regional datasets (e.g., 45 countries in Europe or 191+ worldwide) in minutes rather than hours, the engine implements a **two-tier parallel processing architecture**:
+The datasets are automatically harvested, processed, and published via GitHub Actions using an optimized distributed pipeline:
 
-### Tier 1: Cloud-Level Runner Swarm (GitHub Actions Matrix)
-* **Dynamic Smart Matrix Planning:** The `plan-harvest` job inspects pending targets, checks existing release assets, and partitions the queue across up to **15 concurrent GitHub runners by default** (configurable up to 20).
-* **Smart Batch Packing (~4 Countries per Runner):** Standard country extracts (< 500 MB) are automatically binned into batches of ~4 countries per runner. For example, 20 countries start **5 runner jobs** instead of 20, and 11 countries (Central America) start **3 runner jobs**—preventing wasted runner jobs while balancing total payload evenly across runners.
-* **Conflict-Free Asset Uploads:** The release is pre-created by the planning job, allowing all 20 runner jobs to execute concurrently and stream individual country assets (`{CC}_filtered.osm.pbf`, `{CC}_osm.sqlite`, `{CC}_spatial.sqlite`) into the release via `gh release upload --clobber` without race conditions.
-* **Massive Speedup:** Europe (45 countries) completes in **~10–15 minutes** instead of ~3.5 hours on a single runner.
-
-### Tier 2: Runner-Level Dual Concurrency (`--workers 2`)
-* **100% vCPU Utilization:** Each runner utilizes standard GitHub 2-vCPU hardware with 2 worker processes running concurrently. Total swarm throughput reaches up to **40 vCPUs** crunching spatial data simultaneously.
-* **Dynamic Memory Gating (`SOLO_THRESHOLD_MB = 1024 MB`):** Multi-gigabyte extracts (e.g., France, Germany, Brazil, Russia) automatically run sequentially (SOLO) to ensure the full 7 GB memory headroom is available, eliminating OOM failures.
+* **Balanced Parallel Matrix:** Country extracts are partitioned across parallel runners using Longest Processing Time (LPT) bin-packing, processing entire continents in 10–15 minutes.
+* **Resume & Targeted Retries:** Skips already-published countries in the active release tag. If a specific country needs reprocessing, you can target that exact release tag (`custom_release_tag`) without rebuilding everything from scratch.
+* **Resilient Distribution:** Uploads all country assets in a single batch directly to GitHub Releases with 3-tier exponential backoff retries (10s, 30s, 60s) for robust distribution.
+* **Consolidation into 3 Unified Datasets:** Automatically merges individual country databases and PBFs into the 3 consolidated archives (`_unified_spatial.zip`, `_unified_osm.zip`, `_unified_pbf.zip`) for 1-click global or regional access.
 
 ---
 
@@ -269,7 +267,9 @@ osm-geospatial-engine/
 │   ├── catalog.py                    # Lineage-aware Geofabrik parser & language resolution
 │   ├── db.py                         # Spatial SQLite schemas, WAL mode PRAGMAs, and indexing
 │   ├── extractor.py                  # Pyosmium streaming handler & Shapely linemerge
-│   └── pipeline.py                   # Ingestion, filtering, streaming, and PBF export
+│   ├── pipeline.py                   # Ingestion, filtering, streaming, and PBF export
+│   ├── router.py                     # Multi-country spatial classification and boundary routing
+│   └── merger.py                     # High-performance SQLite database consolidation & PBF bundling
 ├── main.py                           # Parallel CLI entrypoint with incremental release checks
 ├── requirements.txt                  # Python dependencies (osmium, requests, shapely)
 ├── .gitignore                        # Python bytecode, SQLite, and scratch exclusions

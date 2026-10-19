@@ -36,6 +36,15 @@ on:
         required: false
         default: false
         type: boolean
+      custom_release_tag:
+        description: 'Target/resume a specific release tag (e.g. v2026.10.19-0939, release-worldwide). Skips published countries, processing only remaining/failed ones.'
+        required: false
+        type: string
+      merge_unified_release:
+        description: 'Consolidate all countries into 3 unified assets (spatial DB zip, OSM DB zip, PBF bundle zip)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -74,7 +83,10 @@ jobs:
           if [ "${{ inputs.skip_existing }}" != "true" ]; then
             FLAGS="$FLAGS --force"
           fi
-          if [ "${{ inputs.new_dated_release }}" = "true" ]; then
+          if [ -n "${{ inputs.custom_release_tag }}" ]; then
+            TAG="${{ inputs.custom_release_tag }}"
+            FLAGS="$FLAGS --tag-name $TAG"
+          elif [ "${{ inputs.new_dated_release }}" = "true" ]; then
             DATE_STR=$(date +'%Y.%m.%d-%H%M')
             if [ "${{ inputs.continent }}" = "all" ]; then
               TAG="v${DATE_STR}"
@@ -95,7 +107,9 @@ jobs:
           if [ "${{ inputs.continent }}" = "all" ]; then
             RELEASE_TITLE="OSM Datasets: Worldwide"
           fi
-          if [ "${{ inputs.new_dated_release }}" = "true" ]; then
+          if [ -n "${{ inputs.custom_release_tag }}" ]; then
+            RELEASE_TITLE="$RELEASE_TITLE ($TAG_NAME)"
+          elif [ "${{ inputs.new_dated_release }}" = "true" ]; then
             RELEASE_TITLE="$RELEASE_TITLE ($TAG_NAME)"
           fi
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
@@ -118,6 +132,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Free Runner Disk Space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          echo "Disk space after cleanup:"
+          df -h /
+
       - name: Install System Dependencies
         run: |
           sudo apt-get update
@@ -138,7 +160,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python main.py --batch "${{ matrix.countries }}" --workers 2 --continent "${{ inputs.continent }}"
+          EXTRA_FLAGS=""
+          if [ "${{ inputs.skip_existing }}" != "true" ]; then
+            EXTRA_FLAGS="--force"
+          fi
+          python main.py --batch "${{ matrix.countries }}" --workers 2 --continent "${{ inputs.continent }}" --tag-name "${{ needs.plan-harvest.outputs.tag_name }}" $EXTRA_FLAGS
 
       - name: Upload Artifacts to Release
         env:
@@ -149,7 +175,102 @@ jobs:
           echo "Scanning export directory: $EXPORT_DIR"
           if [ -d "$EXPORT_DIR" ] && [ -n "$(ls -A "$EXPORT_DIR" 2>/dev/null)" ]; then
             ls -lh "$EXPORT_DIR/"
-            gh release upload "$TAG_NAME" "$EXPORT_DIR"/* --clobber
+            echo "Uploading all exports to release $TAG_NAME..."
+            uploaded=false
+            wait_times=(10 30 60)
+            for attempt in 1 2 3; do
+              echo "Upload attempt $attempt of 3..."
+              if gh release upload "$TAG_NAME" "$EXPORT_DIR"/* --clobber; then
+                echo "✅ Successfully uploaded all assets on attempt $attempt"
+                uploaded=true
+                break
+              else
+                wait_sec=${wait_times[$((attempt-1))]}
+                echo "⚠️ Upload attempt $attempt failed. Retrying in ${wait_sec}s..."
+                sleep $wait_sec
+              fi
+            done
+            if [ "$uploaded" = "false" ]; then
+              echo "❌ Failed to upload assets after 3 attempts."
+              exit 1
+            fi
           else
             echo "ℹ️ No exports found in $EXPORT_DIR to upload."
+          fi
+
+  consolidate-release:
+    name: 📦 Consolidate into 3 Unified Datasets
+    needs: [plan-harvest, parallel-harvest]
+    if: always() && (inputs.merge_unified_release == true) && (needs.plan-harvest.result == 'success') && (needs.parallel-harvest.result == 'success' || needs.parallel-harvest.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Free Runner Disk Space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -h /
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests
+
+      - name: Download Country Assets from Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ needs.plan-harvest.outputs.tag_name }}"
+          DOWNLOAD_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/release_downloads"
+          mkdir -p "$DOWNLOAD_DIR"
+          echo "Downloading individual country databases and PBFs from release $TAG_NAME..."
+          gh release download "$TAG_NAME" -D "$DOWNLOAD_DIR" --pattern "*_spatial.sqlite" || echo "No spatial.sqlite files found"
+          gh release download "$TAG_NAME" -D "$DOWNLOAD_DIR" --pattern "*_osm.sqlite" || echo "No osm.sqlite files found"
+          gh release download "$TAG_NAME" -D "$DOWNLOAD_DIR" --pattern "*_filtered.osm.pbf" || echo "No filtered.osm.pbf files found"
+
+      - name: Build 3 Unified Merged Assets
+        run: |
+          DOWNLOAD_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/release_downloads"
+          UNIFIED_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/unified_exports"
+          mkdir -p "$UNIFIED_DIR"
+          LABEL="${{ inputs.continent }}"
+          if [ "$LABEL" = "all" ]; then
+            LABEL="worldwide"
+          fi
+          python main.py --merge-dir "$DOWNLOAD_DIR" --merge-output "$UNIFIED_DIR" --merge-label "$LABEL"
+
+      - name: Upload 3 Unified Assets to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ needs.plan-harvest.outputs.tag_name }}"
+          UNIFIED_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/unified_exports"
+          if [ -d "$UNIFIED_DIR" ] && [ -n "$(ls -A "$UNIFIED_DIR" 2>/dev/null)" ]; then
+            ls -lh "$UNIFIED_DIR/"
+            echo "Uploading 3 unified assets to release $TAG_NAME..."
+            uploaded=false
+            wait_times=(10 30 60)
+            for attempt in 1 2 3; do
+              echo "Upload attempt $attempt of 3..."
+              if gh release upload "$TAG_NAME" "$UNIFIED_DIR"/* --clobber; then
+                echo "✅ Successfully uploaded unified assets on attempt $attempt"
+                uploaded=true
+                break
+              else
+                wait_sec=${wait_times[$((attempt-1))]}
+                echo "⚠️ Upload attempt $attempt failed. Retrying in ${wait_sec}s..."
+                sleep $wait_sec
+              fi
+            done
+            if [ "$uploaded" = "false" ]; then
+              echo "❌ Failed to upload unified assets after 3 attempts."
+              exit 1
+            fi
+          else
+            echo "ℹ️ No unified assets found in $UNIFIED_DIR."
           fi

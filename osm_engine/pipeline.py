@@ -4,41 +4,56 @@ import shutil
 import sqlite3
 import subprocess
 import zipfile
-from typing import Dict, Any, Set
+from typing import Dict, Any, Set, List
 from .config import (
     RAM_TEMP_DIR, RAM_DB_DIR, EXPORT_DIR, ENABLE_PBF_COMPRESSION,
     TOP_LANGS
 )
 from .db import init_country_databases, create_db_indexes
-from .extractor import FastUnifiedOSMExtractor
+from .extractor import FastUnifiedOSMExtractor, AdminBoundaryCollector
 
 
 def process_country_target(c_info: Dict[str, Any], dynamic_languages: Dict[str, Set[str]]) -> Dict[str, Any]:
-    cc = c_info["primary_cc"]
+    primary_cc = c_info["primary_cc"]
+    all_ccs = c_info.get("all_ccs") or [primary_cc]
+    is_multi = len(all_ccs) > 1
     slug = c_info["slug"]
     pbf_url = c_info["url"]
 
-    # Sanitize slug and prefix to eliminate sub-directories (e.g. us/us-virgin-islands -> us_us-virgin-islands)
+    # Sanitize slug
     safe_slug = slug.replace("/", "_").replace("\\", "_")
-    prefix = cc if len(c_info["all_ccs"]) == 1 else f"{cc}_{safe_slug}"
-    prefix = prefix.replace("/", "_").replace("\\", "_")
 
-    # Local paths (stored on scratch disk)
+    # Local scratch paths
     raw_pbf = os.path.join(RAM_TEMP_DIR, f"{safe_slug}.osm.pbf")
     filtered_pbf = os.path.join(RAM_TEMP_DIR, f"{safe_slug}_filtered.osm.pbf")
-    local_raw_db = os.path.join(RAM_DB_DIR, f"{prefix}_osm.sqlite")
-    local_spatial_db = os.path.join(RAM_DB_DIR, f"{prefix}_spatial.sqlite")
 
-    # Export targets for GitHub Releases
-    export_raw_db = os.path.join(EXPORT_DIR, f"{prefix}_osm.sqlite")
-    export_spatial_db = os.path.join(EXPORT_DIR, f"{prefix}_spatial.sqlite")
-    export_filtered_pbf = os.path.join(EXPORT_DIR, f"{prefix}_filtered.osm.pbf")
-    export_bundle_zip = os.path.join(EXPORT_DIR, f"{prefix}_bundle.zip")
+    # Per-country database and export paths
+    local_raw_dbs: Dict[str, str] = {}
+    local_spatial_dbs: Dict[str, str] = {}
+    export_raw_dbs: Dict[str, str] = {}
+    export_spatial_dbs: Dict[str, str] = {}
+    export_filtered_pbfs: Dict[str, str] = {}
+    export_bundle_zips: Dict[str, str] = {}
+
+    for sub_cc in all_ccs:
+        local_raw_dbs[sub_cc] = os.path.join(RAM_DB_DIR, f"{sub_cc}_osm.sqlite")
+        local_spatial_dbs[sub_cc] = os.path.join(RAM_DB_DIR, f"{sub_cc}_spatial.sqlite")
+        export_raw_dbs[sub_cc] = os.path.join(EXPORT_DIR, f"{sub_cc}_osm.sqlite")
+        export_spatial_dbs[sub_cc] = os.path.join(EXPORT_DIR, f"{sub_cc}_spatial.sqlite")
+        export_filtered_pbfs[sub_cc] = os.path.join(EXPORT_DIR, f"{sub_cc}_filtered.osm.pbf")
+        export_bundle_zips[sub_cc] = os.path.join(EXPORT_DIR, f"{sub_cc}_bundle.zip")
 
     t0 = time.time()
 
-    # Pre-clean (including any stale -wal and -shm files)
-    for f in (local_raw_db, local_spatial_db, raw_pbf, filtered_pbf, export_bundle_zip):
+    # Pre-clean stale files (including -wal and -shm)
+    files_to_clean = [raw_pbf, filtered_pbf]
+    for sub_cc in all_ccs:
+        files_to_clean.extend([
+            local_raw_dbs[sub_cc], local_spatial_dbs[sub_cc],
+            export_bundle_zips[sub_cc], export_filtered_pbfs[sub_cc]
+        ])
+
+    for f in files_to_clean:
         for ext in ("", "-wal", "-shm"):
             target = f + ext
             if os.path.exists(target):
@@ -47,10 +62,12 @@ def process_country_target(c_info: Dict[str, Any], dynamic_languages: Dict[str, 
                 except OSError:
                     pass
 
-    init_country_databases(local_raw_db, local_spatial_db)
+    # Initialize schema for each target country database
+    for sub_cc in all_ccs:
+        init_country_databases(local_raw_dbs[sub_cc], local_spatial_dbs[sub_cc])
 
     allowed_langs = set(TOP_LANGS)
-    for iso in c_info["all_ccs"]:
+    for iso in all_ccs:
         if iso in dynamic_languages:
             allowed_langs.update(dynamic_languages[iso])
 
@@ -92,49 +109,94 @@ def process_country_target(c_info: Dict[str, Any], dynamic_languages: Dict[str, 
         os.remove(raw_pbf)
 
     if not os.path.exists(filtered_pbf) or os.path.getsize(filtered_pbf) == 0:
-        raise RuntimeError(f"Osmium filter generated empty output for {prefix}")
+        raise RuntimeError(f"Osmium filter generated empty output for {safe_slug}")
 
     filt_mb = os.path.getsize(filtered_pbf) / (1024 * 1024)
 
-    # Copy pre-filtered PBF directly to export folder for fast future downstream processing
-    shutil.copy(filtered_pbf, export_filtered_pbf)
+    # 3. Dynamic Boundary Collector (Extract admin_level=2 polygons if multi-country)
+    admin2_polys = None
+    if is_multi:
+        try:
+            collector = AdminBoundaryCollector(set(all_ccs))
+            collector.apply_file(filtered_pbf, locations=True, idx='flex_mem')
+            admin2_polys = collector.polygons
+        except Exception as e:
+            print(f"⚠️ Notice: Admin boundary pre-collector skipped ({e}), falling back to calibrated geometries.")
 
-    # 3. Stream & Extract into SQLite
-    conn_raw = sqlite3.connect(local_raw_db, timeout=60.0)
-    conn_s = sqlite3.connect(local_spatial_db, timeout=60.0)
-    handler = FastUnifiedOSMExtractor(cc, conn_raw, conn_s, allowed_langs)
+    # 4. Stream & Extract into Partitioned SQLite Databases
+    conn_raw_map = {sub_cc: sqlite3.connect(local_raw_dbs[sub_cc], timeout=60.0) for sub_cc in all_ccs}
+    conn_s_map = {sub_cc: sqlite3.connect(local_spatial_dbs[sub_cc], timeout=60.0) for sub_cc in all_ccs}
+
+    handler = FastUnifiedOSMExtractor(
+        country_code=primary_cc,
+        conn_raw=conn_raw_map,
+        conn_spatial=conn_s_map,
+        allowed_langs=allowed_langs,
+        all_ccs=all_ccs,
+        admin2_polygons=admin2_polys
+    )
     handler.apply_file(filtered_pbf, locations=True, idx='flex_mem')
     handler.flush()
-    handler.cleanup()  # Free way geometry coordinates, bboxes, and close cursors
-    conn_raw.close()
-    conn_s.close()
+    handler.cleanup()  # Free way geometries, bboxes, and close cursors
 
-    # 4. Generate Spatial Indexes & Finalize WAL
-    create_db_indexes(local_raw_db, local_spatial_db)
+    for conn in conn_raw_map.values():
+        conn.close()
+    for conn in conn_s_map.values():
+        conn.close()
 
-    # 5. Move Databases to Export Folder
-    shutil.move(local_raw_db, export_raw_db)
-    shutil.move(local_spatial_db, export_spatial_db)
+    # 5. Build Indexes, Package ZIP Bundles, and Export
+    bundle_sizes: Dict[str, float] = {}
+    for sub_cc in all_ccs:
+        # Generate Spatial Indexes & Finalize WAL
+        create_db_indexes(local_raw_dbs[sub_cc], local_spatial_dbs[sub_cc])
+
+        # Move to Export Folder
+        shutil.move(local_raw_dbs[sub_cc], export_raw_dbs[sub_cc])
+        shutil.move(local_spatial_dbs[sub_cc], export_spatial_dbs[sub_cc])
+
+        # Generate Minimized Country ZIP Bundle (contains both databases)
+        with zipfile.ZipFile(export_bundle_zips[sub_cc], "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            zf.write(export_raw_dbs[sub_cc], arcname=f"{sub_cc}_osm.sqlite")
+            zf.write(export_spatial_dbs[sub_cc], arcname=f"{sub_cc}_spatial.sqlite")
+        bundle_sizes[sub_cc] = round(os.path.getsize(export_bundle_zips[sub_cc]) / (1024 * 1024), 2)
+
+        # Generate Per-Country Filtered PBF
+        if not is_multi:
+            shutil.copy(filtered_pbf, export_filtered_pbfs[sub_cc])
+        else:
+            bounds = handler.country_bounds.get(sub_cc)
+            if bounds and bounds[0] <= bounds[2] and bounds[1] <= bounds[3] and bounds[0] != 180.0:
+                # Add 0.05 degree margin
+                min_lon = max(-180.0, bounds[0] - 0.05)
+                min_lat = max(-90.0, bounds[1] - 0.05)
+                max_lon = min(180.0, bounds[2] + 0.05)
+                max_lat = min(90.0, bounds[3] + 0.05)
+                bbox_str = f"{min_lon:.4f},{min_lat:.4f},{max_lon:.4f},{max_lat:.4f}"
+                extract_cmd = ["osmium", "extract", "-b", bbox_str, filtered_pbf, "-o", export_filtered_pbfs[sub_cc], "--overwrite"]
+                res = subprocess.run(extract_cmd, capture_output=True, text=True)
+                if res.returncode != 0 or not os.path.exists(export_filtered_pbfs[sub_cc]) or os.path.getsize(export_filtered_pbfs[sub_cc]) == 0:
+                    shutil.copy(filtered_pbf, export_filtered_pbfs[sub_cc])
+            else:
+                shutil.copy(filtered_pbf, export_filtered_pbfs[sub_cc])
 
     if os.path.exists(filtered_pbf):
         os.remove(filtered_pbf)
 
-    # 6. Generate Minimized Country ZIP Bundle (contains both databases)
-    with zipfile.ZipFile(export_bundle_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        zf.write(export_raw_db, arcname=f"{prefix}_osm.sqlite")
-        zf.write(export_spatial_db, arcname=f"{prefix}_spatial.sqlite")
-    zip_mb = round(os.path.getsize(export_bundle_zip) / (1024 * 1024), 2)
-
     elapsed = time.time() - t0
+    total_bundle_mb = round(sum(bundle_sizes.values()), 2)
     return {
-        "cc": cc,
-        "prefix": prefix,
+        "cc": primary_cc if not is_multi else ",".join(all_ccs),
+        "prefix": primary_cc if not is_multi else safe_slug,
         "name": c_info["name"],
+        "all_ccs": all_ccs,
         "raw_pbf_mb": round(dl_mb, 1),
         "filtered_pbf_mb": round(filt_mb, 1),
-        "bundle_zip_mb": zip_mb,
+        "bundle_zip_mb": total_bundle_mb,
+        "bundle_sizes": bundle_sizes,
         "entities": handler.total_raw_count,
         "polygons": handler.total_admin_polygons,
         "places": handler.total_spatial_places,
+        "country_raw_count": handler.country_raw_count,
+        "country_spatial_count": handler.country_spatial_count,
         "duration_sec": round(elapsed, 1)
     }

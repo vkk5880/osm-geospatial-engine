@@ -58,12 +58,14 @@ def plan_matrix(targets: List[Dict[str, Any]], max_runners: int = 6, tag_name: s
     num_runners = max(1, min(max_runners, needed_runners))
 
     batches: List[List[Dict[str, Any]]] = [[] for _ in range(num_runners)]
+    batch_totals: List[float] = [0.0] * num_runners
 
-    # Sort descending by size to balance total MB evenly across runners
+    # Sort descending by size and assign to the least-loaded runner (LPT greedy bin-packing)
     sorted_targets = sorted(targets, key=lambda x: x.get("size_mb", 0), reverse=True)
-
-    for idx, t in enumerate(sorted_targets):
-        batches[idx % num_runners].append(t)
+    for t in sorted_targets:
+        min_idx = min(range(num_runners), key=lambda r: batch_totals[r])
+        batches[min_idx].append(t)
+        batch_totals[min_idx] += t.get("size_mb", 0)
 
     matrix_include = []
     for b_idx, batch_items in enumerate(batches, start=1):
@@ -109,7 +111,21 @@ def main():
                         help="Target number of countries per parallel runner (default: 4)")
     parser.add_argument("--tag-name", type=str,
                         help="Custom GitHub Release tag name to check against and publish to")
+    parser.add_argument("--merge-dir", type=str,
+                        help="Directory containing exported country SQLite/PBF files to merge into 3 unified assets")
+    parser.add_argument("--merge-output", type=str,
+                        help="Destination directory for the 3 unified merged assets (default: same as merge-dir)")
+    parser.add_argument("--merge-label", type=str,
+                        help="Label for the 3 unified assets (e.g. worldwide, central-america)")
     args = parser.parse_args()
+
+    # If running dataset consolidation, merge directly and exit
+    if args.merge_dir:
+        from osm_engine.merger import create_unified_3files
+        out_dir = args.merge_output or args.merge_dir
+        label = args.merge_label or args.tag_name or (args.continent if args.continent and args.continent != "all" else "worldwide")
+        create_unified_3files(args.merge_dir, out_dir, label=label)
+        sys.exit(0)
 
     print("Fetching Geofabrik targets and GeoNames language maps...")
     dynamic_languages = load_geonames_country_languages()
@@ -142,19 +158,37 @@ def main():
         for t in targets:
             cc = t["primary_cc"]
             slug = t["slug"]
-            prefix = cc if len(t["all_ccs"]) == 1 else f"{cc}_{slug}"
-            # Check if this target's database or filtered PBF is already published/exported
-            is_published = (
-                f"{prefix}_spatial.sqlite" in existing_assets or
-                f"{prefix}_osm.sqlite" in existing_assets or
-                f"{prefix}_filtered.osm.pbf" in existing_assets or
-                f"{prefix}_bundle.zip" in existing_assets or
-                f"{prefix}_spatial.sqlite" in local_exports or
-                f"{prefix}_osm.sqlite" in local_exports or
-                f"{prefix}_filtered.osm.pbf" in local_exports
-            )
+            all_ccs = t.get("all_ccs") or [cc]
+            is_multi = len(all_ccs) > 1
+
+            if not is_multi:
+                # Single-country extract
+                is_published = (
+                    f"{cc}_bundle.zip" in existing_assets or
+                    f"{cc}_spatial.sqlite" in existing_assets or
+                    f"{cc}_bundle.zip" in local_exports or
+                    f"{cc}_spatial.sqlite" in local_exports or
+                    f"{cc}_{slug}_bundle.zip" in existing_assets or
+                    f"{cc}_{slug}_spatial.sqlite" in existing_assets
+                )
+            else:
+                # Multi-country extract: published only if ALL constituent countries are published
+                all_sub_published = all(
+                    (f"{sub_cc}_bundle.zip" in existing_assets or
+                     f"{sub_cc}_spatial.sqlite" in existing_assets or
+                     f"{sub_cc}_bundle.zip" in local_exports or
+                     f"{sub_cc}_spatial.sqlite" in local_exports)
+                    for sub_cc in all_ccs
+                )
+                legacy_published = (
+                    f"{cc}_{slug}_bundle.zip" in existing_assets or
+                    f"{cc}_{slug}_spatial.sqlite" in existing_assets
+                )
+                is_published = all_sub_published or legacy_published
+
             if is_published:
-                print(f"⏭️ Skipping [{prefix}] {t['name']} (already published in {tag_name})")
+                label = cc if not is_multi else f"{cc} ({','.join(all_ccs)})"
+                print(f"⏭️ Skipping [{label}] {t['name']} (already published)")
                 skipped_count += 1
             else:
                 pending_targets.append(t)
