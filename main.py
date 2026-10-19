@@ -197,7 +197,8 @@ def main():
                         print(f"✅ Finished [{stats['cc']}] {stats['name']} in {stats['duration_sec']}s: "
                               f"{stats['entities']:,} entities, {stats['polygons']:,} polygons | PBF: {stats['filtered_pbf_mb']} MB")
                     except Exception as err:
-                        print(f"❌ Error processing {t['slug']}: {err}", file=sys.stderr)
+                        import traceback
+                        print(f"❌ Error processing {t['slug']}: {err}\n{traceback.format_exc()}", file=sys.stderr)
         else:
             for t in batch_targets:
                 print(f"\nProcessing [{t['primary_cc']}] {t['name']} ({t['size_mb']} MB)...")
@@ -207,7 +208,8 @@ def main():
                     print(f"✅ Finished [{stats['cc']}] in {stats['duration_sec']}s: "
                           f"{stats['entities']:,} entities, {stats['polygons']:,} polygons | PBF: {stats['filtered_pbf_mb']} MB")
                 except Exception as err:
-                    print(f"❌ Error processing {t['slug']}: {err}", file=sys.stderr)
+                    import traceback
+                    print(f"❌ Error processing {t['slug']}: {err}\n{traceback.format_exc()}", file=sys.stderr)
 
     # 2. Process large extracts solo to prevent OOM
     if solo_targets:
@@ -220,7 +222,8 @@ def main():
                 print(f"✅ Finished [{stats['cc']}] in {stats['duration_sec']}s: "
                       f"{stats['entities']:,} entities, {stats['polygons']:,} polygons | PBF: {stats['filtered_pbf_mb']} MB")
             except Exception as err:
-                print(f"❌ Error processing {t['slug']}: {err}", file=sys.stderr)
+                import traceback
+                print(f"❌ Error processing {t['slug']}: {err}\n{traceback.format_exc()}", file=sys.stderr)
 
     if successful_count > 0:
         print("\n📦 Generating combined regional bundles...")

@@ -18,12 +18,14 @@ def process_country_target(c_info: Dict[str, Any], dynamic_languages: Dict[str, 
     slug = c_info["slug"]
     pbf_url = c_info["url"]
 
-    # Distinct prefix guarantees zero collisions between multi-country extracts or sub-extracts
-    prefix = cc if len(c_info["all_ccs"]) == 1 else f"{cc}_{slug}"
+    # Sanitize slug and prefix to eliminate sub-directories (e.g. us/us-virgin-islands -> us_us-virgin-islands)
+    safe_slug = slug.replace("/", "_").replace("\\", "_")
+    prefix = cc if len(c_info["all_ccs"]) == 1 else f"{cc}_{safe_slug}"
+    prefix = prefix.replace("/", "_").replace("\\", "_")
 
     # Local paths (stored on scratch disk)
-    raw_pbf = os.path.join(RAM_TEMP_DIR, f"{slug}.osm.pbf")
-    filtered_pbf = os.path.join(RAM_TEMP_DIR, f"{slug}_filtered.osm.pbf")
+    raw_pbf = os.path.join(RAM_TEMP_DIR, f"{safe_slug}.osm.pbf")
+    filtered_pbf = os.path.join(RAM_TEMP_DIR, f"{safe_slug}_filtered.osm.pbf")
     local_raw_db = os.path.join(RAM_DB_DIR, f"{prefix}_osm.sqlite")
     local_spatial_db = os.path.join(RAM_DB_DIR, f"{prefix}_spatial.sqlite")
 
@@ -35,10 +37,15 @@ def process_country_target(c_info: Dict[str, Any], dynamic_languages: Dict[str, 
 
     t0 = time.time()
 
-    # Pre-clean
+    # Pre-clean (including any stale -wal and -shm files)
     for f in (local_raw_db, local_spatial_db, raw_pbf, filtered_pbf, export_bundle_zip):
-        if os.path.exists(f):
-            os.remove(f)
+        for ext in ("", "-wal", "-shm"):
+            target = f + ext
+            if os.path.exists(target):
+                try:
+                    os.remove(target)
+                except OSError:
+                    pass
 
     init_country_databases(local_raw_db, local_spatial_db)
 
@@ -93,12 +100,12 @@ def process_country_target(c_info: Dict[str, Any], dynamic_languages: Dict[str, 
     shutil.copy(filtered_pbf, export_filtered_pbf)
 
     # 3. Stream & Extract into SQLite
-    conn_raw = sqlite3.connect(local_raw_db)
-    conn_s = sqlite3.connect(local_spatial_db)
+    conn_raw = sqlite3.connect(local_raw_db, timeout=60.0)
+    conn_s = sqlite3.connect(local_spatial_db, timeout=60.0)
     handler = FastUnifiedOSMExtractor(cc, conn_raw, conn_s, allowed_langs)
     handler.apply_file(filtered_pbf, locations=True, idx='flex_mem')
     handler.flush()
-    handler.cleanup()  # Free way geometry coordinates and bboxes from memory
+    handler.cleanup()  # Free way geometry coordinates, bboxes, and close cursors
     conn_raw.close()
     conn_s.close()
 

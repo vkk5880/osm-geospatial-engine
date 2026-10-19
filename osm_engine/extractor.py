@@ -76,9 +76,14 @@ class FastUnifiedOSMExtractor(osmium.SimpleHandler):
         self.total_hierarchy_links = 0
 
     def cleanup(self):
-        """Releases geometry cache from memory once stream processing is complete."""
+        """Releases geometry cache from memory and closes cursors once stream processing is complete."""
         self.way_bboxes.clear()
         self.admin_way_coords.clear()
+        try:
+            self.cur_raw.close()
+            self.cur_s.close()
+        except Exception:
+            pass
 
     def flush(self):
         if self.raw_entities:

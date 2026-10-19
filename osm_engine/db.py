@@ -4,13 +4,17 @@ import sqlite3
 def init_country_databases(raw_db_path: str, spatial_db_path: str):
     """Initializes schema and optimizes performance pragmas for write-heavy loads."""
     for db_path, is_spatial in ((raw_db_path, False), (spatial_db_path, True)):
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=60.0)
+        conn.isolation_level = None  # Autocommit mode
         cur = conn.cursor()
-        # High-throughput tuning
         cur.execute("PRAGMA journal_mode = WAL;")
+        cur.fetchall()
         cur.execute("PRAGMA synchronous = OFF;")
+        cur.fetchall()
         cur.execute("PRAGMA cache_size = -64000;")  # 64MB working cache
+        cur.fetchall()
         cur.execute("PRAGMA temp_store = MEMORY;")
+        cur.fetchall()
 
         if not is_spatial:
             cur.execute("""
@@ -97,20 +101,32 @@ def init_country_databases(raw_db_path: str, spatial_db_path: str):
                 PRIMARY KEY (parent_osm_type, parent_osm_id, child_osm_type, child_osm_id, role)
             );
             """)
-        conn.commit()
+        cur.close()
         conn.close()
 
 
 def create_db_indexes(raw_db_path: str, spatial_db_path: str):
     """Generates secondary B-Tree indexes post-ingestion and truncates WAL for static distribution."""
-    conn_raw = sqlite3.connect(raw_db_path)
+    # Process Raw Database
+    conn_raw = sqlite3.connect(raw_db_path, timeout=60.0)
+    conn_raw.isolation_level = None
     cur_raw = conn_raw.cursor()
     cur_raw.execute("CREATE INDEX IF NOT EXISTS idx_raw_qid ON osm_entities(wikidata_qid);")
     cur_raw.execute("CREATE INDEX IF NOT EXISTS idx_raw_gid ON osm_entities(geoname_id);")
     cur_raw.execute("CREATE INDEX IF NOT EXISTS idx_raw_h_parent ON osm_hierarchy(parent_osm_type, parent_osm_id);")
     cur_raw.execute("CREATE INDEX IF NOT EXISTS idx_raw_h_child ON osm_hierarchy(child_osm_type, child_osm_id);")
+    cur_raw.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    cur_raw.fetchall()
+    cur_raw.execute("PRAGMA journal_mode = DELETE;")
+    cur_raw.fetchall()
+    cur_raw.execute("PRAGMA optimize;")
+    cur_raw.fetchall()
+    cur_raw.close()
+    conn_raw.close()
 
-    conn_s = sqlite3.connect(spatial_db_path)
+    # Process Spatial Database
+    conn_s = sqlite3.connect(spatial_db_path, timeout=60.0)
+    conn_s.isolation_level = None
     cur_s = conn_s.cursor()
     cur_s.execute("CREATE INDEX IF NOT EXISTS idx_s_gid ON spatial_locations(geoname_id);")
     cur_s.execute("CREATE INDEX IF NOT EXISTS idx_s_qid ON spatial_locations(wikidata_qid);")
@@ -118,11 +134,11 @@ def create_db_indexes(raw_db_path: str, spatial_db_path: str):
     cur_s.execute("CREATE INDEX IF NOT EXISTS idx_s_coords ON spatial_locations(latitude, longitude);")
     cur_s.execute("CREATE INDEX IF NOT EXISTS idx_s_h_parent ON spatial_hierarchy(parent_osm_type, parent_osm_id);")
     cur_s.execute("CREATE INDEX IF NOT EXISTS idx_s_h_child ON spatial_hierarchy(child_osm_type, child_osm_id);")
-
-    # Flush WAL into main database and switch to clean DELETE mode for read-only VFS / HTTP range distribution
-    for conn in (conn_raw, conn_s):
-        conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-        conn.execute("PRAGMA journal_mode = DELETE;")
-        conn.execute("PRAGMA optimize;")
-        conn.close()
+    cur_s.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    cur_s.fetchall()
+    cur_s.execute("PRAGMA journal_mode = DELETE;")
+    cur_s.fetchall()
+    cur_s.execute("PRAGMA optimize;")
+    cur_s.fetchall()
+    cur_s.close()
+    conn_s.close()
