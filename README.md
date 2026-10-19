@@ -26,10 +26,9 @@ Working with global OpenStreetMap (OSM) datasets usually requires spinning up he
 **GeoSpatial-Engine** eliminates this complexity by providing clean, pre-built, and self-contained geospatial datasets for every country and territory worldwide. Everything is delivered in lightweight, standalone SQLite databases with pre-computed bounding boxes, simplified GeoJSON polygons, and localized multilingual names—ready for immediate querying in your applications with zero database setup.
 
 ### 🌟 What's Included
-* **📦 3 Unified Merged Downloads:** Instead of downloading hundreds of individual files, access an entire continent or the entire globe in just **3 consolidated files**:
-  1. **`{label}_unified_spatial.zip`** — Single merged spatial database with all settlements, centroids, bounding boxes, and boundaries.
-  2. **`{label}_unified_osm.zip`** — Single merged entity catalog with populations, Wikidata QIDs, GeoNames IDs, and multilingual translations.
-  3. **`{label}_unified_pbf.zip`** — Bundled archive of all country-level clean, pre-filtered binary `.osm.pbf` extracts.
+* **📦 2 Unified Merged Databases:** Instead of downloading hundreds of individual files, access an entire continent or the entire globe in **2 consolidated SQLite databases**:
+  1. **`{label}_unified_spatial.zip`** — Single merged spatial database with all settlements, centroids, bounding boxes, and boundaries (< 1.9 GB).
+  2. **`{label}_unified_osm.zip`** — Single merged entity catalog with populations, Wikidata QIDs, GeoNames IDs, and multilingual translations (< 1.9 GB).
 * **🗺️ Standalone Per-Country SQLite Databases:** Every country has its own `{CC}_spatial.sqlite` and `{CC}_osm.sqlite` with pre-built secondary B-Tree indexes on coordinates, admin levels, Wikidata QIDs, and country codes.
 * **🌐 Multilingual Localized Translations:** Official and common names mapped to ISO 639-1 languages (`en`, `es`, `fr`, `zh`, `ar`, `hi`, etc.) for seamless internationalization and UI display.
 * **📐 Verified Topological Boundary Polygons:** National and regional administrative boundaries (levels 2–8) assembled into clean `MultiPolygon` GeoJSON geometries with preserved topology.
@@ -83,13 +82,12 @@ Each country target generates production-grade outputs designed for different la
 
 | Artifact | Compression / Type | Description |
 | :--- | :--- | :--- |
-| **`{CC}_filtered.osm.pbf`** *(Core Reusable Asset)* | OSM Protobuf (Deflate) | Cleaned, 70%–90% smaller OSM PBF extract. Reusable by any downstream tool (osmium, pyosmium, GDAL, QGIS) for instant reprocessing without downloading gigabytes of raw data. |
+| **`{CC}_filtered.osm.pbf`** *(Core Reusable Asset)* | OSM Protobuf (Deflate) | Cleaned, 70%–90% smaller OSM PBF extract. Reusable by any downstream tool (osmium, GDAL, QGIS) for instant reprocessing. Download all via `gh release download --pattern "*_filtered.osm.pbf"`. |
 | **`{CC}_spatial.sqlite`** | SQLite 3 (WAL mode) | Spatial database with settlement coordinates, centroids, bounding boxes (`min_lat`, `min_lon`, `max_lat`, `max_lon`), and simplified GeoJSON boundary polygons. |
 | **`{CC}_osm.sqlite`** | SQLite 3 (WAL mode) | Comprehensive entity catalog with administrative levels, Wikidata QID, GeoNames ID, population, elevation, and localized multilingual names. |
 | **`{CC}_bundle.zip`** | DEFLATE (6) | Optional bundle containing both SQLite databases, reducing download size by **70%–85%**. |
-| **`{label}_unified_spatial.zip`** *(1 of 3 Unified)* | DEFLATE (6) | Single merged spatial database containing all countries' settlements, centroids, bounding boxes, and boundaries. |
-| **`{label}_unified_osm.zip`** *(2 of 3 Unified)* | DEFLATE (6) | Single merged OSM catalog database containing all countries' entities, metadata, and localized translations. |
-| **`{label}_unified_pbf.zip`** *(3 of 3 Unified)* | DEFLATE (6) | Single archive bundling every country's `{CC}_filtered.osm.pbf` extract for 1-click download of all country PBFs. |
+| **`{label}_unified_spatial.zip`** *(Unified Spatial)* | DEFLATE (6) | Single merged spatial database containing all countries' settlements, centroids, bounding boxes, and boundaries (capped < 1.9 GB). |
+| **`{label}_unified_osm.zip`** *(Unified OSM)* | DEFLATE (6) | Single merged OSM catalog database containing all countries' entities, metadata, and localized translations (capped < 1.9 GB). |
 
 ---
 

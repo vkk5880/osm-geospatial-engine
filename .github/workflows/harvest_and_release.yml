@@ -199,7 +199,7 @@ jobs:
           fi
 
   consolidate-release:
-    name: 📦 Consolidate into 3 Unified Datasets
+    name: 📦 Consolidate into Unified Spatial & OSM Datasets
     needs: [plan-harvest, parallel-harvest]
     if: always() && (inputs.merge_unified_release == true) && (needs.plan-harvest.result == 'success') && (needs.parallel-harvest.result == 'success' || needs.parallel-harvest.result == 'skipped')
     runs-on: ubuntu-latest
@@ -221,19 +221,18 @@ jobs:
         run: |
           pip install requests
 
-      - name: Download Country Assets from Release
+      - name: Download Country Databases from Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG_NAME="${{ needs.plan-harvest.outputs.tag_name }}"
           DOWNLOAD_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/release_downloads"
           mkdir -p "$DOWNLOAD_DIR"
-          echo "Downloading individual country databases and PBFs from release $TAG_NAME..."
+          echo "Downloading individual country spatial and OSM databases from release $TAG_NAME..."
           gh release download "$TAG_NAME" -D "$DOWNLOAD_DIR" --pattern "*_spatial.sqlite" || echo "No spatial.sqlite files found"
           gh release download "$TAG_NAME" -D "$DOWNLOAD_DIR" --pattern "*_osm.sqlite" || echo "No osm.sqlite files found"
-          gh release download "$TAG_NAME" -D "$DOWNLOAD_DIR" --pattern "*_filtered.osm.pbf" || echo "No filtered.osm.pbf files found"
 
-      - name: Build 3 Unified Merged Assets
+      - name: Build Unified Databases
         run: |
           DOWNLOAD_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/release_downloads"
           UNIFIED_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/unified_exports"
@@ -244,7 +243,7 @@ jobs:
           fi
           python main.py --merge-dir "$DOWNLOAD_DIR" --merge-output "$UNIFIED_DIR" --merge-label "$LABEL"
 
-      - name: Upload 3 Unified Assets to Release
+      - name: Upload Unified Databases to Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -252,7 +251,7 @@ jobs:
           UNIFIED_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/unified_exports"
           if [ -d "$UNIFIED_DIR" ] && [ -n "$(ls -A "$UNIFIED_DIR" 2>/dev/null)" ]; then
             ls -lh "$UNIFIED_DIR/"
-            echo "Uploading 3 unified assets to release $TAG_NAME..."
+            echo "Uploading unified database assets to release $TAG_NAME..."
             uploaded=false
             wait_times=(10 30 60)
             for attempt in 1 2 3; do

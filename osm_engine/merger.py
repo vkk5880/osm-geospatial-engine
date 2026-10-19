@@ -79,34 +79,46 @@ def merge_osm_databases(osm_db_files: List[str], target_db_path: str) -> str:
     return target_db_path
 
 
-def bundle_pbf_archive(pbf_files: List[str], target_zip_path: str) -> str:
-    """Packages all country filtered PBF files into a single unified archive."""
-    if os.path.exists(target_zip_path):
-        os.remove(target_zip_path)
+def ensure_max_asset_size(filepath: str, max_bytes: int = 1900 * 1024 * 1024) -> List[str]:
+    """Guarantees no release asset exceeds 1.9 GB (1,992,294,400 bytes)."""
+    if not os.path.exists(filepath):
+        return []
+    sz = os.path.getsize(filepath)
+    if sz <= max_bytes:
+        return [filepath]
 
-    with zipfile.ZipFile(target_zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for pbf in sorted(pbf_files):
-            if os.path.exists(pbf) and os.path.getsize(pbf) > 0:
-                zf.write(pbf, arcname=os.path.basename(pbf))
+    sz_mb = round(sz / (1024 * 1024), 1)
+    print(f"⚠️ {os.path.basename(filepath)} ({sz_mb} MB) exceeds 1.9 GB limit. Splitting into chunks...")
+    chunks = []
+    chunk_idx = 1
+    with open(filepath, "rb") as f_in:
+        while True:
+            block = f_in.read(max_bytes)
+            if not block:
+                break
+            chunk_file = f"{filepath}.{chunk_idx:03d}"
+            with open(chunk_file, "wb") as f_out:
+                f_out.write(block)
+            chunks.append(chunk_file)
+            chunk_idx += 1
+    os.remove(filepath)
+    return chunks
 
-    return target_zip_path
 
-
-def create_unified_3files(search_dir: str, output_dir: str, label: str = "worldwide"):
+def create_unified_databases(search_dir: str, output_dir: str, label: str = "worldwide"):
     """
-    Scans search_dir for country databases and PBFs and generates the 3 unified assets:
+    Scans search_dir for country databases and generates the 2 unified SQLite assets:
     1. {label}_unified_spatial.zip (Contains {label}_spatial.sqlite)
     2. {label}_unified_osm.zip (Contains {label}_osm.sqlite)
-    3. {label}_unified_pbf.zip (Contains all {CC}_filtered.osm.pbf files)
+    Enforces a strict 1.9 GB maximum limit per asset.
     """
     os.makedirs(output_dir, exist_ok=True)
     all_files = [os.path.join(search_dir, f) for f in os.listdir(search_dir)]
 
     spatial_files = [f for f in all_files if f.endswith("_spatial.sqlite") and "unified" not in f]
     osm_files = [f for f in all_files if f.endswith("_osm.sqlite") and "unified" not in f]
-    pbf_files = [f for f in all_files if f.endswith("_filtered.osm.pbf") and "unified" not in f]
 
-    print(f"\n📊 Consolidating {len(spatial_files)} spatial DBs, {len(osm_files)} OSM DBs, and {len(pbf_files)} PBFs...")
+    print(f"\n📊 Consolidating {len(spatial_files)} spatial DBs and {len(osm_files)} OSM DBs into unified release assets...")
 
     # 1. Merge Spatial DBs
     if spatial_files:
@@ -117,8 +129,9 @@ def create_unified_3files(search_dir: str, output_dir: str, label: str = "worldw
         with zipfile.ZipFile(spatial_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             zf.write(merged_spatial_db, arcname=os.path.basename(merged_spatial_db))
         os.remove(merged_spatial_db)
-        sz_mb = round(os.path.getsize(spatial_zip) / (1024 * 1024), 2)
-        print(f"✅ Generated 1/3: {os.path.basename(spatial_zip)} ({sz_mb} MB)")
+        ensure_max_asset_size(spatial_zip, max_bytes=1900 * 1024 * 1024)
+        sz_mb = round(os.path.getsize(spatial_zip) / (1024 * 1024), 2) if os.path.exists(spatial_zip) else "multi-part"
+        print(f"✅ Generated 1/2: {os.path.basename(spatial_zip)} ({sz_mb} MB)")
 
     # 2. Merge OSM DBs
     if osm_files:
@@ -129,14 +142,12 @@ def create_unified_3files(search_dir: str, output_dir: str, label: str = "worldw
         with zipfile.ZipFile(osm_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             zf.write(merged_osm_db, arcname=os.path.basename(merged_osm_db))
         os.remove(merged_osm_db)
-        sz_mb = round(os.path.getsize(osm_zip) / (1024 * 1024), 2)
-        print(f"✅ Generated 2/3: {os.path.basename(osm_zip)} ({sz_mb} MB)")
+        ensure_max_asset_size(osm_zip, max_bytes=1900 * 1024 * 1024)
+        sz_mb = round(os.path.getsize(osm_zip) / (1024 * 1024), 2) if os.path.exists(osm_zip) else "multi-part"
+        print(f"✅ Generated 2/2: {os.path.basename(osm_zip)} ({sz_mb} MB)")
 
-    # 3. Bundle PBFs
-    if pbf_files:
-        pbf_zip = os.path.join(output_dir, f"{label}_unified_pbf.zip")
-        print(f"📦 Archiving {len(pbf_files)} filtered PBFs into {os.path.basename(pbf_zip)}...")
-        bundle_pbf_archive(pbf_files, pbf_zip)
-        sz_mb = round(os.path.getsize(pbf_zip) / (1024 * 1024), 2)
-        print(f"✅ Generated 3/3: {os.path.basename(pbf_zip)} ({sz_mb} MB)")
+
+create_unified_3files = create_unified_databases
+
+
 
