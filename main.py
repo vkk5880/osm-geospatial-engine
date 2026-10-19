@@ -225,7 +225,7 @@ def main():
                 import traceback
                 print(f"❌ Error processing {t['slug']}: {err}\n{traceback.format_exc()}", file=sys.stderr)
 
-    if successful_count > 0:
+    if successful_count > 0 and not args.batch:
         print("\n📦 Generating combined regional bundles...")
         create_combined_archives(continent=args.continent)
 

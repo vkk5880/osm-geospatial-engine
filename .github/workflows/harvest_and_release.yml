@@ -121,16 +121,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python main.py --batch "${{ matrix.countries }}" --workers 2
+          python main.py --batch "${{ matrix.countries }}" --workers 2 --continent "${{ inputs.continent }}"
 
       - name: Upload Artifacts to Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG_NAME="${{ needs.plan-harvest.outputs.tag_name }}"
-          if [ -d /tmp/osm_scratch/exports ] && [ -n "$(ls -A /tmp/osm_scratch/exports 2>/dev/null)" ]; then
-            ls -lh /tmp/osm_scratch/exports/
-            gh release upload "$TAG_NAME" /tmp/osm_scratch/exports/* --clobber
+          EXPORT_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/exports"
+          echo "Scanning export directory: $EXPORT_DIR"
+          if [ -d "$EXPORT_DIR" ] && [ -n "$(ls -A "$EXPORT_DIR" 2>/dev/null)" ]; then
+            ls -lh "$EXPORT_DIR/"
+            gh release upload "$TAG_NAME" "$EXPORT_DIR"/* --clobber
           else
-            echo "ℹ️ No exports found to upload."
+            echo "ℹ️ No exports found in $EXPORT_DIR to upload."
           fi
