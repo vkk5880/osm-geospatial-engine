@@ -20,6 +20,11 @@ on:
         description: 'Optional single country slug (e.g., guatemala, monaco)'
         required: false
         type: string
+      skip_existing:
+        description: 'Skip countries already published in GitHub Release'
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -50,12 +55,17 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run Harvester Engine
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          COUNTRY_FLAG=""
+          FLAGS=""
           if [ -n "${{ inputs.specific_country }}" ]; then
-            COUNTRY_FLAG="--country ${{ inputs.specific_country }}"
+            FLAGS="$FLAGS --country ${{ inputs.specific_country }}"
           fi
-          python main.py --continent "${{ inputs.continent }}" $COUNTRY_FLAG
+          if [ "${{ inputs.skip_existing }}" != "true" ]; then
+            FLAGS="$FLAGS --force"
+          fi
+          python main.py --continent "${{ inputs.continent }}" $FLAGS
 
       - name: Publish Artifacts to GitHub Releases
         env:
@@ -64,12 +74,22 @@ jobs:
           TAG_NAME="release-${{ inputs.continent }}"
           RELEASE_TITLE="OSM Datasets: ${{ inputs.continent }}"
           
+          # Check if any new exports were generated
+          if [ -z "$(ls -A /tmp/osm_scratch/exports/ 2>/dev/null)" ]; then
+            echo "ℹ️ No new files generated (all queued targets were already up to date)."
+            exit 0
+          fi
+
           # List generated files
           ls -lh /tmp/osm_scratch/exports/
           
-          # Publish or update release
-          gh release create "$TAG_NAME" /tmp/osm_scratch/exports/* \
-            --title "$RELEASE_TITLE" \
-            --notes "Automated daily extraction of administrative boundaries, weather coordinates, and localized settlements from OpenStreetMap and Geofabrik." \
-            --clobber
+          # Create release if it doesn't exist yet
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Creating release $TAG_NAME..."
+            gh release create "$TAG_NAME" \
+              --title "$RELEASE_TITLE" \
+              --notes "Automated daily extraction of administrative boundaries, weather coordinates, and localized settlements from OpenStreetMap and Geofabrik."
+          fi
 
+          # Upload artifacts incrementally without clobbering other countries
+          gh release upload "$TAG_NAME" /tmp/osm_scratch/exports/* --clobber

@@ -60,3 +60,21 @@ def get_geofabrik_targets(continent_filter: Optional[str] = None) -> List[Dict[s
     targets.sort(key=lambda x: x["primary_cc"])
     return targets
 
+
+def get_existing_release_assets(repo: str, tag: str, token: Optional[str] = None) -> Set[str]:
+    """Fetches set of existing asset filenames from a GitHub release to support incremental runs."""
+    url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "OSM-Geospatial-Engine"
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            return {a.get("name") for a in data.get("assets", []) if a.get("name")}
+    except Exception as e:
+        print(f"⚠️ Could not fetch release assets for {tag}: {e}")
+    return set()
