@@ -11,11 +11,11 @@ from osm_engine.catalog import (
     get_geofabrik_targets,
     get_existing_release_assets
 )
-from osm_engine.pipeline import process_country_target
 
 
 def _worker_task(payload: tuple) -> Dict[str, Any]:
     """Top-level worker function for multi-processing execution."""
+    from osm_engine.pipeline import process_country_target
     c_info, dynamic_languages = payload
     return process_country_target(c_info, dynamic_languages)
 
@@ -172,6 +172,7 @@ def main():
         sys.exit(0)
 
     print(f"🎯 Total targets queued: {len(targets)} (Local Workers: {args.workers})")
+    from osm_engine.pipeline import process_country_target
 
     # Separate targets into SOLO (> SOLO_THRESHOLD_MB) and BATCHABLE
     solo_targets = [t for t in targets if t["size_mb"] >= SOLO_THRESHOLD_MB]
