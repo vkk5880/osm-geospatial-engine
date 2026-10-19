@@ -27,10 +27,15 @@ on:
         default: true
         type: boolean
       max_runners:
-        description: 'Max parallel GitHub runner jobs (default: 15, max: 20)'
+        description: 'Max parallel GitHub runner jobs (default: 6, max: 20)'
         required: true
-        default: '15'
+        default: '6'
         type: string
+      new_dated_release:
+        description: 'Create new dated release tag (e.g. v2026.10.19-1430) instead of fixed tag'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -69,6 +74,15 @@ jobs:
           if [ "${{ inputs.skip_existing }}" != "true" ]; then
             FLAGS="$FLAGS --force"
           fi
+          if [ "${{ inputs.new_dated_release }}" = "true" ]; then
+            DATE_STR=$(date +'%Y.%m.%d-%H%M')
+            if [ "${{ inputs.continent }}" = "all" ]; then
+              TAG="v${DATE_STR}"
+            else
+              TAG="release-${{ inputs.continent }}-${DATE_STR}"
+            fi
+            FLAGS="$FLAGS --tag-name $TAG"
+          fi
           python main.py --continent "${{ inputs.continent }}" --plan-matrix --max-runners "${{ inputs.max_runners }}" $FLAGS
 
       - name: Pre-Create Release Tag
@@ -80,6 +94,9 @@ jobs:
           RELEASE_TITLE="OSM Datasets: ${{ inputs.continent }}"
           if [ "${{ inputs.continent }}" = "all" ]; then
             RELEASE_TITLE="OSM Datasets: Worldwide"
+          fi
+          if [ "${{ inputs.new_dated_release }}" = "true" ]; then
+            RELEASE_TITLE="$RELEASE_TITLE ($TAG_NAME)"
           fi
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
             echo "Creating release $TAG_NAME..."

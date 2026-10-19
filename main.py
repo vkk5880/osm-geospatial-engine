@@ -36,13 +36,13 @@ def create_combined_archives(continent: Optional[str] = None):
         print(f"📦 Created combined spatial bundle: {os.path.basename(combined_spatial_zip)} ({spatial_mb} MB, {len(spatial_files)} countries)")
 
 
-def plan_matrix(targets: List[Dict[str, Any]], max_runners: int = 15, tag_name: str = "release-worldwide", countries_per_runner: int = 4):
+def plan_matrix(targets: List[Dict[str, Any]], max_runners: int = 6, tag_name: str = "release-worldwide", countries_per_runner: int = 4):
     """
     Smart matrix planner:
     - Automatically packs ~3 to 4 countries per runner for typical extracts (< 500MB).
     - Prevents wasting runner jobs on single small countries (e.g., 20 countries -> 5 runners, 11 countries -> 3 runners).
     - Distributes workloads round-robin to balance total download size across runners.
-    - Capped at max_runners (default: 15, max: 20).
+    - Capped at max_runners (default: 6, max: 20).
     """
     if not targets:
         print("ℹ️ No pending targets to schedule.")
@@ -103,10 +103,12 @@ def main():
                         help="GitHub repository (owner/repo) to check existing releases for incremental runs")
     parser.add_argument("--plan-matrix", action="store_true",
                         help="Generate GitHub Actions matrix JSON without executing harvest")
-    parser.add_argument("--max-runners", type=int, default=15,
-                        help="Maximum parallel runner jobs for matrix planning (default: 15, max 20)")
+    parser.add_argument("--max-runners", type=int, default=6,
+                        help="Maximum parallel runner jobs for matrix planning (default: 6, max 20)")
     parser.add_argument("--countries-per-runner", type=int, default=4,
                         help="Target number of countries per parallel runner (default: 4)")
+    parser.add_argument("--tag-name", type=str,
+                        help="Custom GitHub Release tag name to check against and publish to")
     args = parser.parse_args()
 
     print("Fetching Geofabrik targets and GeoNames language maps...")
@@ -120,14 +122,14 @@ def main():
         batch_slugs = {s.strip().lower() for s in args.batch.split(",") if s.strip()}
         targets = [t for t in targets if t["slug"].lower() in batch_slugs]
 
+    default_tag = f"release-{args.continent.lower()}" if args.continent and args.continent.lower() not in ("all", "worldwide") else "release-worldwide"
+    tag_name = args.tag_name or default_tag
+
     if not targets:
         print("❌ No matching targets found.")
         if args.plan_matrix and "GITHUB_OUTPUT" in os.environ:
-            tag_name = f"release-{args.continent.lower()}" if args.continent and args.continent.lower() not in ("all", "worldwide") else "release-worldwide"
             plan_matrix([], args.max_runners, tag_name)
         sys.exit(0 if args.plan_matrix else 1)
-
-    tag_name = f"release-{args.continent.lower()}" if args.continent and args.continent.lower() not in ("all", "worldwide") else "release-worldwide"
 
     # 2. Incremental / Skip-Existing Resolution
     if not args.force:
