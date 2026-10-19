@@ -41,6 +41,12 @@ exports/
 databases/
 downloads/
 
+# Colab / Jupyter Notebooks (Keep out of public repo)
+osm.py
+legacy/
+*.ipynb
+.ipynb_checkpoints/
+
 # IDE / Editor files
 .vscode/
 .idea/
@@ -50,4 +56,3 @@ downloads/
 # OS files
 .DS_Store
 Thumbs.db
-
