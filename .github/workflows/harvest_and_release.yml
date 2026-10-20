@@ -41,7 +41,12 @@ on:
         required: false
         type: string
       merge_unified_release:
-        description: 'Consolidate all countries into 3 unified assets (spatial DB zip, OSM DB zip, PBF bundle zip)'
+        description: 'Consolidate countries into unified SQLite databases (spatial DB zip and OSM DB zip capped < 1.9 GB)'
+        required: false
+        default: false
+        type: boolean
+      merge_regional_releases:
+        description: 'When running worldwide, also publish combined regional databases to dedicated tags (release-europe, release-asia, etc.)'
         required: false
         default: false
         type: boolean
@@ -241,7 +246,11 @@ jobs:
           if [ "$LABEL" = "all" ]; then
             LABEL="worldwide"
           fi
-          python main.py --merge-dir "$DOWNLOAD_DIR" --merge-output "$UNIFIED_DIR" --merge-label "$LABEL"
+          EXTRA_FLAGS=""
+          if [ "${{ inputs.continent }}" = "all" ] && [ "${{ inputs.merge_regional_releases }}" = "true" ]; then
+            EXTRA_FLAGS="--merge-regional"
+          fi
+          python main.py --merge-dir "$DOWNLOAD_DIR" --merge-output "$UNIFIED_DIR" --merge-label "$LABEL" $EXTRA_FLAGS
 
       - name: Upload Unified Databases to Release
         env:
@@ -249,15 +258,19 @@ jobs:
         run: |
           TAG_NAME="${{ needs.plan-harvest.outputs.tag_name }}"
           UNIFIED_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/unified_exports"
+          LABEL="${{ inputs.continent }}"
+          if [ "$LABEL" = "all" ]; then
+            LABEL="worldwide"
+          fi
           if [ -d "$UNIFIED_DIR" ] && [ -n "$(ls -A "$UNIFIED_DIR" 2>/dev/null)" ]; then
             ls -lh "$UNIFIED_DIR/"
-            echo "Uploading unified database assets to release $TAG_NAME..."
+            echo "Uploading ${LABEL}_unified_* to release $TAG_NAME..."
             uploaded=false
             wait_times=(10 30 60)
             for attempt in 1 2 3; do
               echo "Upload attempt $attempt of 3..."
-              if gh release upload "$TAG_NAME" "$UNIFIED_DIR"/* --clobber; then
-                echo "✅ Successfully uploaded unified assets on attempt $attempt"
+              if gh release upload "$TAG_NAME" "$UNIFIED_DIR/${LABEL}_unified_"* --clobber; then
+                echo "✅ Successfully uploaded unified assets to $TAG_NAME on attempt $attempt"
                 uploaded=true
                 break
               else
@@ -273,3 +286,25 @@ jobs:
           else
             echo "ℹ️ No unified assets found in $UNIFIED_DIR."
           fi
+
+      - name: Sync Unified Databases to Dedicated Regional Releases
+        if: inputs.continent == 'all' && inputs.merge_regional_releases == true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          UNIFIED_DIR="${RUNNER_TEMP:-/tmp/osm_scratch}/unified_exports"
+          CONTINENTS=("europe" "asia" "north-america" "south-america" "africa" "central-america" "australia-oceania")
+          for cont in "${CONTINENTS[@]}"; do
+            REGIONAL_TAG="release-${cont}"
+            if compgen -G "$UNIFIED_DIR/${cont}_unified_*.zip" > /dev/null; then
+              echo "📦 Publishing $cont combined databases to dedicated release $REGIONAL_TAG..."
+              if ! gh release view "$REGIONAL_TAG" >/dev/null 2>&1; then
+                echo "Creating dedicated release $REGIONAL_TAG..."
+                gh release create "$REGIONAL_TAG" \
+                  --title "OSM Datasets: ${cont^}" \
+                  --notes "Consolidated regional SQLite spatial & OSM catalog databases for ${cont^}."
+              fi
+              gh release upload "$REGIONAL_TAG" "$UNIFIED_DIR/${cont}_unified_"*.zip --clobber
+              echo "✅ Successfully updated $REGIONAL_TAG with combined regional databases!"
+            fi
+          done

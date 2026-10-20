@@ -116,15 +116,19 @@ def main():
     parser.add_argument("--merge-output", type=str,
                         help="Destination directory for the 3 unified merged assets (default: same as merge-dir)")
     parser.add_argument("--merge-label", type=str,
-                        help="Label for the 3 unified assets (e.g. worldwide, central-america)")
+                        help="Label for the unified assets (e.g. worldwide, central-america)")
+    parser.add_argument("--merge-regional", action="store_true",
+                        help="Also generate continent-level unified databases (e.g. europe_unified_*, asia_unified_*)")
     args = parser.parse_args()
 
     # If running dataset consolidation, merge directly and exit
     if args.merge_dir:
-        from osm_engine.merger import create_unified_3files
+        from osm_engine.merger import create_unified_databases, create_regional_unified_databases
         out_dir = args.merge_output or args.merge_dir
         label = args.merge_label or args.tag_name or (args.continent if args.continent and args.continent != "all" else "worldwide")
-        create_unified_3files(args.merge_dir, out_dir, label=label)
+        create_unified_databases(args.merge_dir, out_dir, label=label)
+        if args.merge_regional:
+            create_regional_unified_databases(args.merge_dir, out_dir)
         sys.exit(0)
 
     print("Fetching Geofabrik targets and GeoNames language maps...")

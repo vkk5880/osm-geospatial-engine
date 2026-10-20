@@ -27,13 +27,24 @@ Working with global OpenStreetMap (OSM) datasets usually requires spinning up he
 
 ### 🌟 What's Included
 * **📦 2 Unified Merged Databases:** Instead of downloading hundreds of individual files, access an entire continent or the entire globe in **2 consolidated SQLite databases**:
-  1. **`{label}_unified_spatial.zip`** — Single merged spatial database with all settlements, centroids, bounding boxes, and boundaries (< 1.9 GB).
-  2. **`{label}_unified_osm.zip`** — Single merged entity catalog with populations, Wikidata QIDs, GeoNames IDs, and multilingual translations (< 1.9 GB).
+  1. **`worldwide_unified_spatial.zip`** — Single merged spatial database with all settlements, centroids, bounding boxes, and boundaries (< 1.9 GB).
+  2. **`worldwide_unified_osm.zip`** — Single merged entity catalog with populations, Wikidata QIDs, GeoNames IDs, and multilingual translations (< 1.9 GB).
 * **🗺️ Standalone Per-Country SQLite Databases:** Every country has its own `{CC}_spatial.sqlite` and `{CC}_osm.sqlite` with pre-built secondary B-Tree indexes on coordinates, admin levels, Wikidata QIDs, and country codes.
 * **🌐 Multilingual Localized Translations:** Official and common names mapped to ISO 639-1 languages (`en`, `es`, `fr`, `zh`, `ar`, `hi`, etc.) for seamless internationalization and UI display.
 * **📐 Verified Topological Boundary Polygons:** National and regional administrative boundaries (levels 2–8) assembled into clean `MultiPolygon` GeoJSON geometries with preserved topology.
 * **🎯 Pure Zero-Cross-Contamination Filtering:** Combined regional extracts (such as `gcc-states`, `israel-and-palestine`, `haiti-and-domrep`, `senegal-and-gambia`) are cleanly partitioned into their respective individual sovereign country datasets.
 * **⚡ Pre-Filtered Reusable PBF Extracts:** Cleaned binary `.osm.pbf` packages reduced by **70%–90%**, ready for immediate use in QGIS, GDAL, osmium, or mobile apps without downloading gigabytes of raw data.
+
+> [!TIP]
+> **Supported Regional Zones:** While **`worldwide`** is the primary default, regional builds produce zone-specific unified databases:
+> * **Worldwide:** `worldwide_unified_spatial.zip` & `worldwide_unified_osm.zip`
+> * **Europe:** `europe_unified_spatial.zip` & `europe_unified_osm.zip`
+> * **Asia:** `asia_unified_spatial.zip` & `asia_unified_osm.zip`
+> * **North America:** `north-america_unified_spatial.zip` & `north-america_unified_osm.zip`
+> * **South America:** `south-america_unified_spatial.zip` & `south-america_unified_osm.zip`
+> * **Africa:** `africa_unified_spatial.zip` & `africa_unified_osm.zip`
+> * **Central America:** `central-america_unified_spatial.zip` & `central-america_unified_osm.zip`
+> * **Australia-Oceania:** `australia-oceania_unified_spatial.zip` & `australia-oceania_unified_osm.zip`
 
 ---
 
@@ -53,8 +64,8 @@ flowchart TD
     end
 
     subgraph S3["3. Production Deliverables (GitHub Releases)"]
-        F1[("🗺️ {label}_unified_spatial.zip\nUnified Global Spatial SQLite DB (< 1.9 GB)")]
-        F2[("💾 {label}_unified_osm.zip\nUnified Global OSM Catalog DB (< 1.9 GB)")]
+        F1[("🗺️ worldwide_unified_spatial.zip\nUnified Global Spatial SQLite DB (< 1.9 GB)")]
+        F2[("💾 worldwide_unified_osm.zip\nUnified Global OSM Catalog DB (< 1.9 GB)")]
         F3["📁 {CC}_spatial.sqlite & {CC}_osm.sqlite\nIndividual Country SQLite DBs"]
         F4["📦 {CC}_filtered.osm.pbf\nCleaned Binary Country PBF Extracts"]
     end
@@ -94,8 +105,8 @@ Each country target generates production-grade outputs designed for different la
 | **`{CC}_spatial.sqlite`** | SQLite 3 (WAL mode) | Spatial database with settlement coordinates, centroids, bounding boxes (`min_lat`, `min_lon`, `max_lat`, `max_lon`), and simplified GeoJSON boundary polygons. |
 | **`{CC}_osm.sqlite`** | SQLite 3 (WAL mode) | Comprehensive entity catalog with administrative levels, Wikidata QID, GeoNames ID, population, elevation, and localized multilingual names. |
 | **`{CC}_bundle.zip`** | DEFLATE (6) | Optional bundle containing both SQLite databases, reducing download size by **70%–85%**. |
-| **`{label}_unified_spatial.zip`** *(Unified Spatial)* | DEFLATE (6) | Single merged spatial database containing all countries' settlements, centroids, bounding boxes, and boundaries (capped < 1.9 GB). |
-| **`{label}_unified_osm.zip`** *(Unified OSM)* | DEFLATE (6) | Single merged OSM catalog database containing all countries' entities, metadata, and localized translations (capped < 1.9 GB). |
+| **`worldwide_unified_spatial.zip`** *(Unified Spatial)* | DEFLATE (6) | Single merged spatial database containing all countries' settlements, centroids, bounding boxes, and boundaries (capped < 1.9 GB). Regional builds named `{continent}_unified_spatial.zip`. |
+| **`worldwide_unified_osm.zip`** *(Unified OSM)* | DEFLATE (6) | Single merged OSM catalog database containing all countries' entities, metadata, and localized translations (capped < 1.9 GB). Regional builds named `{continent}_unified_osm.zip`. |
 
 ---
 
@@ -173,7 +184,7 @@ python download.py --list
 
 Each export produces two complementary databases designed for specific application workloads:
 
-### 1. `{CC}_spatial.sqlite` (or `{label}_unified_spatial.zip`)
+### 1. `{CC}_spatial.sqlite` (or `worldwide_unified_spatial.zip`)
 * **Core Purpose:** High-speed GIS analysis, bounding-box filtering, geospatial queries, map rendering, and boundary clipping.
 * **What is Saved:** Settlement centroids, administrative boundaries with simplified topological GeoJSON polygons (`polygon_geojson`), bounding boxes (`bbox_min_lat`, `bbox_min_lon`, `bbox_max_lat`, `bbox_max_lon`), and spatial inheritance links.
 * **Best Used For:**
@@ -181,7 +192,7 @@ Each export produces two complementary databases designed for specific applicati
   * Rendering national, provincial, and district boundaries on Leaflet, Mapbox, Deck.gl, or QGIS directly from SQLite.
   * Spatial joins and reverse geocoding without spinning up a heavy PostGIS instance.
 
-### 2. `{CC}_osm.sqlite` (or `{label}_unified_osm.zip`)
+### 2. `{CC}_osm.sqlite` (or `worldwide_unified_osm.zip`)
 * **Core Purpose:** Search autocomplete, entity resolution, multilingual internationalization (i18n), and administrative graph traversal.
 * **What is Saved:** Comprehensive entity attributes including census populations, elevations, postal codes, Wikidata QIDs, GeoNames IDs, IANA timezones, Wikipedia article titles, official/common multilingual translations (ISO 639-1), and parent-child administrative hierarchies.
 * **Best Used For:**
@@ -333,7 +344,7 @@ The datasets are automatically harvested, processed, and published via GitHub Ac
 * **Balanced Parallel Matrix:** Country extracts are partitioned across parallel runners using Longest Processing Time (LPT) bin-packing, processing entire continents in 10–15 minutes.
 * **Resume & Targeted Retries:** Skips already-published countries in the active release tag. If a specific country needs reprocessing, you can target that exact release tag (`custom_release_tag`) without rebuilding everything from scratch.
 * **Resilient Distribution:** Uploads all country assets in a single batch directly to GitHub Releases with 3-tier exponential backoff retries (10s, 30s, 60s) for robust distribution.
-* **Consolidation into 2 Unified Datasets:** Automatically merges individual country databases into 2 consolidated archives (`_unified_spatial.zip` and `_unified_osm.zip` capped < 1.9 GB) for 1-click global or regional access.
+* **Consolidation into 2 Unified Datasets:** Automatically merges individual country databases into 2 consolidated archives (`worldwide_unified_spatial.zip` and `worldwide_unified_osm.zip` capped < 1.9 GB) for 1-click global or regional access.
 
 ---
 
@@ -451,8 +462,10 @@ This repository includes a production-grade GitHub Actions workflow (`.github/wo
 1. Navigate to **Actions** &rarr; **Harvest OSM & Publish Datasets**.
 2. Select your target **Continent / Region** (e.g., `central-america`, `europe`, `asia`, `all` for worldwide).
 3. Choose whether to **Skip countries already published** (`true` by default for fast, incremental runs).
-4. (Optional) Provide a specific country slug (e.g., `monaco`, `iceland`, `guatemala`).
-5. Click **Run workflow**.
+4. (Optional) Check **Consolidate into unified SQLite databases** to generate `worldwide_unified_spatial.zip` & `worldwide_unified_osm.zip`.
+5. (Optional) Check **Publish regional unified databases to dedicated tags** when running worldwide to automatically sync `release-europe`, `release-asia`, etc. with only their combined regional databases.
+6. (Optional) Provide a specific country slug (e.g., `monaco`, `iceland`, `guatemala`).
+7. Click **Run workflow**.
 
 ---
 

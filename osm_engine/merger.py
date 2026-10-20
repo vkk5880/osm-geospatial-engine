@@ -11,7 +11,9 @@ import sys
 import sqlite3
 import zipfile
 import shutil
-from typing import List, Optional
+from collections import defaultdict
+from typing import List, Optional, Dict
+from .catalog import get_geofabrik_targets
 from .db import init_single_database, create_single_db_indexes
 
 
@@ -148,6 +150,89 @@ def create_unified_databases(search_dir: str, output_dir: str, label: str = "wor
 
 
 create_unified_3files = create_unified_databases
+
+
+def get_country_continent_map() -> Dict[str, str]:
+    """Builds a mapping from ISO alpha-2 country codes to continent names."""
+    try:
+        targets = get_geofabrik_targets(continent_filter=None)
+        mapping = {}
+        for t in targets:
+            cont = t.get("parent") or "other"
+            if cont == "russia":
+                cont = "europe"
+            for cc in t.get("all_ccs", []):
+                mapping[cc.upper()] = cont
+        return mapping
+    except Exception as e:
+        print(f"⚠️ Could not fetch Geofabrik targets for continent mapping ({e}), using fallback.")
+        return {}
+
+
+def create_regional_unified_databases(search_dir: str, output_dir: str) -> Dict[str, List[str]]:
+    """
+    Groups country SQLite databases by continent and generates the 2 unified databases for each continent:
+    {continent}_unified_spatial.zip & {continent}_unified_osm.zip
+    Returns a dictionary mapping continent name to list of generated zip paths.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    cc_map = get_country_continent_map()
+    all_files = [os.path.join(search_dir, f) for f in os.listdir(search_dir)]
+
+    spatial_by_cont: Dict[str, List[str]] = defaultdict(list)
+    osm_by_cont: Dict[str, List[str]] = defaultdict(list)
+
+    for f in all_files:
+        basename = os.path.basename(f)
+        if "unified" in basename:
+            continue
+        if basename.endswith("_spatial.sqlite"):
+            cc = basename.split("_")[0].upper()
+            cont = cc_map.get(cc)
+            if cont and cont != "other":
+                spatial_by_cont[cont].append(f)
+        elif basename.endswith("_osm.sqlite"):
+            cc = basename.split("_")[0].upper()
+            cont = cc_map.get(cc)
+            if cont and cont != "other":
+                osm_by_cont[cont].append(f)
+
+    results: Dict[str, List[str]] = defaultdict(list)
+    continents = sorted(set(list(spatial_by_cont.keys()) + list(osm_by_cont.keys())))
+    print(f"\n🌍 Generating regional unified databases for {len(continents)} zones: {continents}...")
+
+    for cont in continents:
+        s_files = spatial_by_cont[cont]
+        o_files = osm_by_cont[cont]
+        print(f"\n--- Zone: {cont} ({len(s_files)} spatial DBs, {len(o_files)} OSM DBs) ---")
+
+        # 1. Merge Spatial DBs for continent
+        if s_files:
+            merged_s = os.path.join(output_dir, f"{cont}_spatial.sqlite")
+            merge_spatial_databases(s_files, merged_s)
+            s_zip = os.path.join(output_dir, f"{cont}_unified_spatial.zip")
+            with zipfile.ZipFile(s_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+                zf.write(merged_s, arcname=os.path.basename(merged_s))
+            os.remove(merged_s)
+            ensure_max_asset_size(s_zip, max_bytes=1900 * 1024 * 1024)
+            sz_mb = round(os.path.getsize(s_zip) / (1024 * 1024), 2) if os.path.exists(s_zip) else "multi-part"
+            print(f"✅ Created {os.path.basename(s_zip)} ({sz_mb} MB)")
+            results[cont].append(s_zip)
+
+        # 2. Merge OSM DBs for continent
+        if o_files:
+            merged_o = os.path.join(output_dir, f"{cont}_osm.sqlite")
+            merge_osm_databases(o_files, merged_o)
+            o_zip = os.path.join(output_dir, f"{cont}_unified_osm.zip")
+            with zipfile.ZipFile(o_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+                zf.write(merged_o, arcname=os.path.basename(merged_o))
+            os.remove(merged_o)
+            ensure_max_asset_size(o_zip, max_bytes=1900 * 1024 * 1024)
+            sz_mb = round(os.path.getsize(o_zip) / (1024 * 1024), 2) if os.path.exists(o_zip) else "multi-part"
+            print(f"✅ Created {os.path.basename(o_zip)} ({sz_mb} MB)")
+            results[cont].append(o_zip)
+
+    return results
 
 
 
